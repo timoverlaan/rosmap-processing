@@ -6,6 +6,10 @@ name = "rosmap-processing"
 platforms = ["win-64", "linux-64"]
 version = "0.1.0"
 
+[system-requirements]
+linux = "3.10"  # Lower for older kernel on DAIC
+cuda = "12.4"
+
 [tasks]
 
 [dependencies]

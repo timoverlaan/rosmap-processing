@@ -1,6 +1,6 @@
 
 # First download all the data (both ROSMAP and ROSMAP_MIT)
-pixi run python src/download_synapse.py
+pixi run python -u src/download_synapse.py
 
 # Then list all the files
 ls data/raw/ROSMAP/
