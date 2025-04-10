@@ -62,7 +62,7 @@ if __name__ == "__main__":
         syn_id_specimen_metadata,
         syn_id_demultiplex,
     ]:
-        syn.get(syn_id_ast, downloadLocation="data/raw/ROSMAP/", ifcollision="keep.local")
+        syn.get(syn_id, downloadLocation="data/raw/ROSMAP/", ifcollision="keep.local")
 
     # then download the mit data
     for syn_id in [
