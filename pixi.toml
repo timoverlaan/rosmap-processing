@@ -1,16 +1,23 @@
 [project]
-authors = ["DarthTimothee <timoverlaan@gmail.com>"]
+authors = ["timoverlaan <t.verlaan@tudelft.nl>"]
 channels = ["conda-forge"]
-description = "Add a short description here"
+description = "Reproducible environment for processing the ROSMAP dataset"
 name = "rosmap-processing"
-platforms = ["win-64"]
+platforms = ["win-64", "linux-64"]
 version = "0.1.0"
 
 [tasks]
 
 [dependencies]
-python = ">=3.13.2,<4"
-ipykernel = ">=6.29.5,<7"
+ipykernel = "*"
+psutil = ">=5.9.8,<5.10.dev0"
+pandas = ">=2.2.3,<3"
+
+r-base = ">=4.2"
+r-seurat = "*"
+r-hdf5r = "*"
+r-reticulate = "*"
+r-remotes = "*"
 
 [pypi-dependencies]
-synapseclient = "*"
+synapseclient = ">=4.7.0"

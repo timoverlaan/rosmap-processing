@@ -1,6 +1,10 @@
-
+# large data files
 data/
+
+# apptainer files
+*.sif
 
 # pixi environments
 .pixi
 *.egg-info
+
