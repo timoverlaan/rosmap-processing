@@ -25,6 +25,18 @@ syn_id_mit_oligo = "syn52368918"  # Oligodendrocytes.rds
 
 syn_id_mit_raw = "syn52392369"  # PFC427_raw_data.h5ad --> Unfiltered counts (not using this one for now)
 
+# The clinical metadata
+syn_id_clinical = "syn3191087"  # ROSMAP_clinical.csv
+syn_id_clinical_codebook = "syn3191090"  # ROSMAP_clinical_codebook.pdf
+syn_id_scRNA_metadata = "syn21073536"  # ROSMAP_assay_scrnaSeq_metadata.csv
+syn_id_specimen_metadata = "syn21323366"  # ROSMAP_biospecimen_metadata.csv
+syn_id_demultiplex = "syn34572333"  # ROSMAP_snRNAseq_demultiplexed_ID_mapping.csv
+
+# The metadata for the mit data
+syn_id_mit_sc_metadata = "syn52368902"  # MIT_ROSMAP_Multiomics_assay_snRNAseq_metadata
+syn_id_mit_specimen_metadata = "syn52430345"  # MIT_ROSMAP_Multiomics_biospecimen_metadata.csv
+syn_id_mit_individual_metadata = "syn52430346"  # MIT_ROSMAP_Multiomics_individual_metadata.csv
+# NOTE: in the folder syn64373557 there is also information about the overlap with other studies.
 
 if __name__ == "__main__":
 
@@ -44,6 +56,11 @@ if __name__ == "__main__":
         syn_id_micro,
         syn_id_oligo,
         syn_id_vasc,
+        syn_id_clinical,
+        syn_id_clinical_codebook,
+        syn_id_scRNA_metadata,
+        syn_id_specimen_metadata,
+        syn_id_demultiplex,
     ]:
         syn.get(syn_id_ast, downloadLocation="data/raw/ROSMAP/", ifcollision="keep.local")
 
@@ -57,5 +74,8 @@ if __name__ == "__main__":
         syn_id_mit_inh,
         syn_id_mit_opc,
         syn_id_mit_oligo,
+        syn_id_mit_sc_metadata,
+        syn_id_mit_specimen_metadata,
+        syn_id_mit_individual_metadata,
     ]:
         syn.get(syn_id, downloadLocation="data/raw/ROSMAP_MIT/", ifcollision="keep.local")
