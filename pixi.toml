@@ -1,0 +1,16 @@
+[project]
+authors = ["DarthTimothee <timoverlaan@gmail.com>"]
+channels = ["conda-forge"]
+description = "Add a short description here"
+name = "rosmap-processing"
+platforms = ["win-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = ">=3.13.2,<4"
+ipykernel = ">=6.29.5,<7"
+
+[pypi-dependencies]
+synapseclient = "*"
