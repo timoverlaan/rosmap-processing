@@ -14,8 +14,8 @@ From: ghcr.io/prefix-dev/pixi:0.34.0
 
     cd /opt/app
 
-    # Setup pixi dependencies (doesn't work yet...)
-    pixi install
+    # Setup pixi dependencies
+    pixi install --all
     
     # Clean up
     rm -rf ~/.cache/rattler
