@@ -15,8 +15,6 @@
 module use /opt/insy/modulefiles
 module load cuda/12.4
 
-cd /tudelft.net/staff-umbrella/scGraphNN/rosmap-processing/  # this should be the root of the git repo
-
 apptainer exec --nv --writable-tmpfs --pwd /opt/app --containall \
 	--bind src/:/opt/app/src/ \
 	--bind data/:/opt/app/data/ \
