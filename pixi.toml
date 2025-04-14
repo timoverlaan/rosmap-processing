@@ -4,11 +4,11 @@ channels = ["conda-forge"]
 description = "Reproducible environment for processing the ROSMAP dataset"
 name = "rosmap-processing"
 platforms = ["win-64", "linux-64"]
-version = "0.1.0"
+version = "0.1.1"
 
 [system-requirements]
 linux = "3.10"  # Lower for older kernel on DAIC
-cuda = "12.4"
+# cuda = "12.4"  # (not necessary for processing)
 
 [tasks]
 
