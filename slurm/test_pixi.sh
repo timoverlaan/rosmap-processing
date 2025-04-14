@@ -21,4 +21,5 @@ apptainer exec --nv --writable-tmpfs --pwd /opt/app --containall \
 	--bind src/:/opt/app/src/ \
 	--bind data/:/opt/app/data/ \
 	--bind out/:/opt/app/out/ \
+	--bind token.txt:/opt/app/token.txt \
 	./container_pixi.sif pixi run python -u src/download_synapse.py
