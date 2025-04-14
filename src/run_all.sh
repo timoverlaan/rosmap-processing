@@ -6,6 +6,9 @@ pixi run python -u src/download_synapse.py
 ls data/raw/ROSMAP/
 ls data/raw/ROSMAP_MIT/
 
+# Install the required R packages
+pixi run Rscript src/convert_R/install_deps.R
+
 # The MIT data is in rds format. We first convert to h5Seurat files, then to h5ad. 
 # The other ROSMAP data can be converted from h5Seurat to h5ad directly.
 pixi run Rscript src/convert_R/rds_to_h5Seurat.R \
