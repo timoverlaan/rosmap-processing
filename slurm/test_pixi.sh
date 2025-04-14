@@ -15,9 +15,10 @@
 module use /opt/insy/modulefiles
 module load cuda/12.4
 
-cd /tudelft.net/staff-umbrella/scGraphNN/rosmap-processing/
+cd /tudelft.net/staff-umbrella/scGraphNN/rosmap-processing/  # this should be the root of the git repo
 
-APPTAINER_CWD="/tudelft.net/staff-umbrella/scGraphNN/rosmap-processing/"
-
-apptainer exec --nv --writable-tmpfs --pwd /opt/app --bind /tudelft.net/:/tudelft.net/ ./container_pixi.sif pixi run \
-	python -u src/download_synapse.py
+apptainer exec --nv --writable-tmpfs --pwd /opt/app --containall \
+	--bind src/:/opt/app/src/ \
+	--bind data/:/opt/app/data/ \
+	--bind out/:/opt/app/out/ \
+	./container_pixi.sif pixi run python -u src/download_synapse.py
