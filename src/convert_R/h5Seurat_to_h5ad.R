@@ -18,11 +18,10 @@ for (h5Seurat_path in args) {
 
   # Display conversion message
   cat("Converting:", h5Seurat_path, "→", h5ad_path, "\n")
-  
+
   # Perform the conversion
   Convert(h5Seurat_path, dest = "h5ad", overwrite = TRUE)
 
   # free up memory
-  rm(seurat_obj)
   gc()
 }
