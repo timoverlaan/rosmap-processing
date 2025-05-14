@@ -36,5 +36,5 @@ pixi run Rscript src/convert_R/h5Seurat_to_h5ad.R \
     data/raw/ROSMAP/cux2-.h5Seurat \
     data/raw/ROSMAP/inhibitory.h5Seurat \
     data/raw/ROSMAP/microglia.h5Seurat \
-    data/raw/ROSMAP/oligodendria.h5Seurat \
+    data/raw/ROSMAP/oligodendroglia.h5Seurat \
     data/raw/ROSMAP/vascular.niche.h5Seurat
