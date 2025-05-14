@@ -20,7 +20,7 @@ for (h5Seurat_path in args) {
   cat("Converting:", h5Seurat_path, "→", h5ad_path, "\n")
 
   # Perform the conversion
-  Convert(h5Seurat_path, dest = "h5ad", overwrite = TRUE)
+  Convert(h5Seurat_path, dest = "h5ad", assay = "RNA", overwrite = TRUE)
 
   # free up memory
   gc()
