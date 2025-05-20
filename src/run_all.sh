@@ -38,3 +38,22 @@ pixi run Rscript src/convert_R/h5Seurat_to_h5ad.R \
     data/raw/ROSMAP/microglia.h5Seurat \
     data/raw/ROSMAP/oligodendroglia.h5Seurat \
     data/raw/ROSMAP/vascular.niche.h5Seurat
+
+# Run fix_categories.py on all the h5ad files, this turns the cell_type column, which is a string, into a categorical column.
+# It also just imports and exports again, fixing a backwards compatibility warning that is automatically solved.
+pixi run python src/fix_categories.py data/raw/ROSMAP_MIT/Astrocytes.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP_MIT/Excitatory_neurons_set1.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP_MIT/Excitatory_neurons_set2.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP_MIT/Excitatory_neurons_set3.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP_MIT/Immune_cells.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP_MIT/Inhibitory_neurons.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP_MIT/OPCs.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP_MIT/Oligodendrocytes.h5ad
+
+pixi run python src/fix_categories.py data/raw/ROSMAP/astrocytes.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP/cux2+.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP/cux2-.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP/inhibitory.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP/microglia.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP/oligodendroglia.h5ad
+pixi run python src/fix_categories.py data/raw/ROSMAP/vascular.niche.h5ad
