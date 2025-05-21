@@ -9,13 +9,9 @@
 #SBATCH --mail-type=END     # Set mail type to 'END' to receive a mail when the job finishes. 
 #SBATCH --output=slurm/out/%j_all.out # Set name of output log. %j is the Slurm jobId
 #SBATCH --error=slurm/out/%j_all.out # Set name of error log. %j is the Slurm jobId
-#SBATCH --gres=gpu
 /usr/bin/scontrol show job -d "$SLURM_JOB_ID"  # check sbatch directives are working
 
-module use /opt/insy/modulefiles
-module load cuda/12.4
-
-apptainer exec --nv --writable-tmpfs --pwd /opt/app --containall \
+apptainer exec --writable-tmpfs --pwd /opt/app --containall \
 	--bind src/:/opt/app/src/ \
 	--bind data/:/opt/app/data/ \
 	--bind out/:/opt/app/out/ \
