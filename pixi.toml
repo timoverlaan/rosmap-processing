@@ -22,6 +22,8 @@ r-seurat = "*"
 r-hdf5r = "*"
 r-reticulate = "*"
 r-remotes = "*"
+anndata = ">=0.11.4,<0.12"
+seaborn = ">=0.13.2,<0.14"
 
 [pypi-dependencies]
 synapseclient = ">=4.7.0"
