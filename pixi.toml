@@ -4,7 +4,7 @@ channels = ["conda-forge"]
 description = "Reproducible environment for processing the ROSMAP dataset"
 name = "rosmap-processing"
 platforms = ["win-64", "linux-64"]
-version = "0.1.1"
+version = "0.1.2"
 
 [system-requirements]
 linux = "3.10"  # Lower for older kernel on DAIC
@@ -22,9 +22,16 @@ r-seurat = "*"
 r-hdf5r = "*"
 r-reticulate = "*"
 r-remotes = "*"
+
 anndata = ">=0.11.4,<0.12"
 seaborn = ">=0.13.2,<0.14"
+scanpy = ">=1.11.2,<2"
+python-igraph = ">=0.11.8,<0.12"
+leidenalg = ">=0.10.2,<0.11"
 
 [pypi-dependencies]
 synapseclient = ">=4.7.0"
 awscli = ">=1.40.33, <2"
+
+[target.linux-64.dependencies]
+scikit-misc = ">=0.1.4,<0.2"  # Apparently not available on windows
