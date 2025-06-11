@@ -15,4 +15,4 @@ apptainer exec --writable-tmpfs --pwd /opt/app --containall \
 	--bind src/:/opt/app/src/ \
 	--bind data/:/opt/app/data/ \
 	--bind out/:/opt/app/out/ \
-	./container_pixi_0-1-2.sif pixi run python -u src/scanpy_pipeline.py data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad data/seaAD/PFC/RNAseq/seaad1000_k30.h5ad --layer UMIs --n_genes 1000 k-neighbors 30
+	./container_pixi_0-1-2.sif pixi run python -u src/scanpy_pipeline.py data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad data/seaAD/PFC/RNAseq/seaad1000_k30.h5ad --layer UMIs --n-genes 1000 --k-neighbors 30
