@@ -27,3 +27,4 @@ seaborn = ">=0.13.2,<0.14"
 
 [pypi-dependencies]
 synapseclient = ">=4.7.0"
+awscli = ">=1.40.33, <2"

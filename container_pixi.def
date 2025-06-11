@@ -19,7 +19,6 @@ From: ghcr.io/prefix-dev/pixi:0.34.0
 
     # Setup pixi dependencies
     pixi install --all
-    pixi global install awscli
 
     # Clean up
     rm -rf ~/.cache/rattler
