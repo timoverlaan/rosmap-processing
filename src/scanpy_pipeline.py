@@ -13,9 +13,9 @@ parser.add_argument("--raw", action="store_true", help="If set, the raw data wil
 parser.add_argument("--n-genes", type=int, default=2000, help="Number of highly variable genes to select. Default is 2000.")
 parser.add_argument("--k-neighbors", type=int, default=30, help="Number of neighbors for the KNN graph. Default is 30.")
 parser.add_argument("--individual-pca", action="store_true", help="If set, PCA for the KNN graph will be computed for each individual separately.")
-
-# TODO: add option to use existing gene list from another h5ad, or csv
-
+parser.add_argument("--import-genes", type=str, default=None, help="Path to a TXT or AnnData file to use the genes from. This overrides HVG selection.")
+# parser.add_argument("--export-overlap", action="store_true", help="If set, and the genes from --import-genes are not a subset of the input data, \
+#                     only the overlap is used, and we also export an h5ad for the refence dataset with only the overlapping genes.")
 args = parser.parse_args()
 
 
@@ -30,6 +30,8 @@ if __name__ == "__main__":
     print(f"  Number of highly variable genes: {args.n_genes}")
     print(f"  Number of neighbors for KNN graph: {args.k_neighbors}")
     print(f"  Individual PCA: {args.individual_pca}")
+    if args.import_genes:
+        print(f"  Importing genes from: {args.import_genes}")
     print("\n")
 
     print("Importing h5ad file: ", args.path)
@@ -62,14 +64,32 @@ if __name__ == "__main__":
     
     print(f"Filtering cells and genes with minimum thresholds. Shape before filtering: {adata.shape}")
     sc.pp.filter_cells(adata, min_genes=200)
-    sc.pp.filter_genes(adata, min_cells=5)
+    if not args.import_genes:
+        sc.pp.filter_genes(adata, min_cells=5)
     print(f"Shape after filtering: {adata.shape}")
 
-    print(f"Selecting highly variable genes...")
-    sc.pp.highly_variable_genes(adata, flavor='seurat_v3', n_top_genes=args.n_genes, subset=True)
-    print(f"Number of highly variable genes selected: {adata.var['highly_variable'].sum()}")
+    if args.import_genes:
+        print(f"Importing genes from: {args.import_genes}")
+        if args.import_genes.endswith('.txt'):
+            raise ValueError("Importing genes from a TXT file is not supported yet. Please use an AnnData file.")
+        elif args.import_genes.endswith('.h5ad'):
+            adata_import_genes = ad.read_h5ad(args.import_genes)
+            select_genes = adata_import_genes.var_names
 
-    print("Normalizing and log-transforming data...")
+            if not set(select_genes).issubset(adata.var_names):
+                print(f"Warning: The genes in the import file are not a subset of the input data. Using only the overlapping genes.")
+                adata_overlap = adata[:, adata.var_names.isin(select_genes)].copy()
+                del adata
+                adata = adata_overlap
+        else:
+            raise ValueError("The import file must be a TXT or AnnData file.")
+        
+    else:
+        print(f"Selecting highly variable genes...")
+        sc.pp.highly_variable_genes(adata, flavor='seurat_v3', n_top_genes=args.n_genes, subset=True)
+        print(f"Number of highly variable genes selected: {adata.var['highly_variable'].sum()}")
+
+    print("Normalizing total (CPM) and log-transforming data...")
     sc.pp.normalize_total(adata, target_sum=1e6)  # Normalize to 1 million reads per cell
     sc.pp.log1p(adata)
     print("Done.")

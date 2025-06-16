@@ -5,7 +5,7 @@ import numpy as np
 import argparse
 
 
-parser = argparse.ArgumentParser(description="Script to add metadata to an AnnData object.")
+parser = argparse.ArgumentParser(description="Script to add metadata to an AnnData object. This should only be necessary for the ROSMAP data, as SeaAD already includes it.")
 parser.add_argument(
     "path",
     type=str,
@@ -34,14 +34,17 @@ def add_metadata(adata: ad.AnnData, metadata: pd.DataFrame, mit: bool) -> None:
     join_col = "individualID" if mit else "projid"
     if join_col not in adata.obs.columns:
         raise ValueError(f"Column '{join_col}' not found in AnnData object, which is required for matching with metadata.")
-    
-    for col in metadata.columns:
-        adata.obs[col] = np.nan
-        
+    if join_col not in metadata.columns:
+        raise ValueError(f"Column '{join_col}' not found in metadata CSV file, which is required for matching with AnnData object.")
 
-        # TODO: correctly join the dataframes here
+    adata.obs = adata.obs.merge(
+        metadata,
+        left_on=join_col,
+        right_on=join_col,
+        how='left',
+    )
 
-
+    adata.obs.to_csv(f"data/test_obs{'_mit' if mit else ''}.csv", index=True)  # For debugging, remove later
 
 
 if __name__ == "__main__":
