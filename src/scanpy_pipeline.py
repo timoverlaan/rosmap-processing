@@ -66,23 +66,34 @@ if __name__ == "__main__":
     sc.pp.filter_cells(adata, min_genes=200)
     if not args.import_genes:
         sc.pp.filter_genes(adata, min_cells=5)
+    else:
+        print("Not filtering genes, as we are importing genes from another file.")
     print(f"Shape after filtering: {adata.shape}")
 
     if args.import_genes:
         print(f"Importing genes from: {args.import_genes}")
         if args.import_genes.endswith('.txt'):
-            raise ValueError("Importing genes from a TXT file is not supported yet. Please use an AnnData file.")
+            with open(args.import_genes, 'r') as f:
+                select_genes = [line.strip() for line in f if line.strip()]
+            select_genes = set(select_genes)
         elif args.import_genes.endswith('.h5ad'):
             adata_import_genes = ad.read_h5ad(args.import_genes)
             select_genes = adata_import_genes.var_names
 
-            if not set(select_genes).issubset(adata.var_names):
-                print(f"Warning: The genes in the import file are not a subset of the input data. Using only the overlapping genes.")
-                adata_overlap = adata[:, adata.var_names.isin(select_genes)].copy()
-                del adata
-                adata = adata_overlap
         else:
             raise ValueError("The import file must be a TXT or AnnData file.")
+        
+        if not set(select_genes).issubset(adata.var_names):
+            print(f"Warning: The genes in the import file are not a subset of the input data. Using only the overlapping genes.")
+        
+        print(f"Importing {len(select_genes)} genes: ")
+        print(", ".join(list(select_genes)))
+
+        adata_overlap = adata[:, adata.var_names.isin(select_genes)].copy()
+        del adata
+        adata = adata_overlap
+
+        print(f"Shape after importing genes: {adata.shape}")
         
     else:
         print(f"Selecting highly variable genes...")
