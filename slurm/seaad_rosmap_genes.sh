@@ -7,8 +7,8 @@
 #SBATCH --cpus-per-task=16   # Request number of CPUs (threads) per task. Default is 1 (note: CPUs are always allocated to jobs per 2).
 #SBATCH --mem=500GB          # Request memory (MB) per node. Default is 1024MB (1GB). For multiple tasks, specify --mem-per-cpu instead
 #SBATCH --mail-type=END     # Set mail type to 'END' to receive a mail when the job finishes. 
-#SBATCH --output=slurm/out/%j_all.out # Set name of output log. %j is the Slurm jobId
-#SBATCH --error=slurm/out/%j_all.out # Set name of error log. %j is the Slurm jobId
+#SBATCH --output=slurm/out/%j_SeaAD_ROSMAP_genes.out # Set name of output log. %j is the Slurm jobId
+#SBATCH --error=slurm/out/%j_SeaAD_ROSMAP_genes.out # Set name of error log. %j is the Slurm jobId
 /usr/bin/scontrol show job -d "$SLURM_JOB_ID"  # check sbatch directives are working
 
 apptainer exec --writable-tmpfs --pwd /opt/app --containall \
