@@ -132,7 +132,7 @@ def convert_seaad(adata: ad.AnnData) -> None:
     })
 
     # Derive the Wang labels
-    adata.obs["Wang"] = None
+    adata.obs["Wang"] = "Intermediate"
     adata.obs["Wang_intermediate"] = True  # These will be excluded
 
     # SeaAD doesn't have the cogdx column, so we derive it from the cognitive status
