@@ -9,7 +9,6 @@ parser = argparse.ArgumentParser(description="Script to add metadata to an AnnDa
 parser.add_argument(
     "path",
     type=str,
-    required=True,
     help="Path to the input h5ad file. Note: this will be overwritten!",
 )
 parser.add_argument(
@@ -31,7 +30,8 @@ def add_metadata(adata: ad.AnnData, metadata: pd.DataFrame, mit: bool) -> None:
     # if ROSMAP (non-MIT), we have only the projid. This is also in the metadata csv.
     # for MIT, we have to use the individualID in the h5ad, which should also be present in the metadata csv.
 
-    join_col = "individualID" if mit else "projid"
+    join_col = "projid" if mit else "individualID"
+
     if join_col not in adata.obs.columns:
         raise ValueError(f"Column '{join_col}' not found in AnnData object, which is required for matching with metadata.")
     if join_col not in metadata.columns:

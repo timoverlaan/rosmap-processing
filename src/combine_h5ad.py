@@ -12,7 +12,6 @@ parser.add_argument(
     "paths",
     type=str,
     nargs="+",
-    required=True,
     help="Paths to the input h5ad files.",
 )
 parser.add_argument(
