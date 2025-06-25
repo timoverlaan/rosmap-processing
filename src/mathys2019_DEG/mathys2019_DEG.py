@@ -40,4 +40,4 @@ print(f"\nFound {len(degs)} unique DEGs across all cell types.")
 combined_df = pd.concat(ct_dfs, axis=1)
 combined_df.to_csv("data/mathys2019_DEGs.csv")
 with open("data/mathys2019_DEGs_genes.txt", "w") as f:
-    f.write(", ".join(list(degs)))
+    f.write("\n".join(list(degs)))
