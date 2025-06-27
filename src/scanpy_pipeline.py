@@ -120,6 +120,12 @@ if __name__ == "__main__":
     
     for donor in tqdm(adata.obs["Donor ID"].unique(), desc="Building donor KNN graphs"):
         donor_slice = adata[adata.obs["Donor ID"] == donor].copy()
+
+        if donor_slice.shape[0] <= 1:
+            print(f"Skipping donor {donor} with only {donor_slice.shape[0]} cell(s). \
+                  It will be excluded from the output file, because we cannot construct a kNN graph.")
+            continue
+
         if args.individual_pca:  # if individual PCA is requested
             sc.pp.pca(donor_slice, n_comps=50)
         sc.pp.neighbors(donor_slice, n_neighbors=args.k_neighbors, use_rep="X_pca")
