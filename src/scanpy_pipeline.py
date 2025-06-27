@@ -114,6 +114,9 @@ if __name__ == "__main__":
 
     print("Building KNN graph...")
     slices = []
+
+    if not "Donor ID" in adata.obs.columns:
+	adata.obs["Donor ID"] = adata.obs["projid"]
     for donor in tqdm(adata.obs["Donor ID"].unique(), desc="Building donor KNN graphs"):
         donor_slice = adata[adata.obs["Donor ID"] == donor].copy()
         if args.individual_pca:  # if individual PCA is requested
