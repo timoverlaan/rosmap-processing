@@ -49,6 +49,41 @@ dev = [
 [project.scripts]
 rosmap-process = "rosmap_processing.cli.main:cli"
 
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "-ra",
+]
+markers = [
+    "integration: marks tests as integration tests requiring real data files (deselect with '-m \"not integration\"')",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/tests/*", "*/test_*.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
 [project.urls]
 Homepage = "https://github.com/timoverlaan/rosmap-processing"
 Repository = "https://github.com/timoverlaan/rosmap-processing"
@@ -57,13 +92,6 @@ Issues = "https://github.com/timoverlaan/rosmap-processing/issues"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["rosmap_processing*"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = "-v --strict-markers"
 
 [tool.black]
 line-length = 100

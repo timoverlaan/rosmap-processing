@@ -53,6 +53,18 @@ MANIFEST
 .coverage
 htmlcov/
 .tox/
+*.cover
+.hypothesis/
+test_output/
+
+# Virtual environments
+venv/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
 .hypothesis/
 
 # IDEs
@@ -68,3 +80,6 @@ htmlcov/
 *.ipynb_checkpoints
 
 token.txt
+
+
+test_output/
