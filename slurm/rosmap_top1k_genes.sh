@@ -17,5 +17,5 @@ apptainer exec --writable-tmpfs --pwd /opt/app --containall \
 	--bind out/:/opt/app/out/ \
 	./container_pixi_0-1-2.sif pixi run python -u src/scanpy_pipeline.py \
 		data/raw/ROSMAP_MIT/combined.h5ad \
-		data/processed/rosmap_mit_Mathysgenes_k30.h5ad \
+		data/processed/rosmap_mit_top1000_k30.h5ad \
 		--n-genes 1000 --k-neighbors 30
