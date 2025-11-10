@@ -15,6 +15,7 @@ apptainer exec --writable-tmpfs --pwd /opt/app --containall \
 	--bind src/:/opt/app/src/ \
 	--bind data/:/opt/app/data/ \
 	--bind out/:/opt/app/out/ \
+	--env PYTHONPATH=/opt/app/src \
 	./container_pixi_0-1-2.sif pixi run python -m rosmap_processing pipeline scanpy \
 		data/raw/ROSMAP_MIT/combined.h5ad \
 		data/processed/rosmap_mit_Mathysgenes_k30.h5ad \

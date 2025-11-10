@@ -16,4 +16,5 @@ apptainer exec --writable-tmpfs --pwd /opt/app --containall \
 	--bind data/:/opt/app/data/ \
 	--bind out/:/opt/app/out/ \
 	--bind token.txt:/opt/app/token.txt \
+	--env PYTHONPATH=/opt/app/src \
 	./container_pixi.sif sh ./src/run_all_seaad.sh

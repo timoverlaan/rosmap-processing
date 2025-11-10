@@ -11,6 +11,8 @@ linux = "3.10"  # Lower for older kernel on DAIC
 # cuda = "12.4"  # (not necessary for processing)
 
 [tasks]
+# This task will be available but not run automatically
+setup-dev = "pip install -e ."
 
 [dependencies]
 ipykernel = "*"
