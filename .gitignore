@@ -1,5 +1,7 @@
 # large data files
 data/
+# But include source code in the rosmap_processing package
+!src/rosmap_processing/data/
 
 # apptainer files
 *.sif

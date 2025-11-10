@@ -1,54 +1,77 @@
-import anndata as ad
-import pandas as pd
-import numpy as np
+#!/usr/bin/env python3
+"""
+DEPRECATED: This script has been refactored into the rosmap_processing package.
 
-import argparse
+This wrapper maintains backward compatibility with existing workflows.
+The functionality has been moved to rosmap_processing.core.combine module.
 
-from tqdm import tqdm
+For new code, please use:
+    from rosmap_processing.core.combine import combine_and_save
+"""
 
+import sys
+import warnings
+from pathlib import Path
 
-parser = argparse.ArgumentParser(description="Combine all provided h5ad files into a single h5ad file.")
-parser.add_argument(
-    "paths",
-    type=str,
-    nargs="+",
-    help="Paths to the input h5ad files.",
+warnings.warn(
+    "src/combine_h5ad.py is deprecated and will be removed in v1.0. "
+    "Please use: python -m rosmap_processing.core.combine",
+    DeprecationWarning,
+    stacklevel=2
 )
-parser.add_argument(
-    "--output",
-    type=str,
-    required=True,
-    help="Path to the output h5ad file. This will contain all the data from the input files.",
-)
-args = parser.parse_args()
 
-
-def combine_h5ad(paths: list[str]) -> ad.AnnData:
-    """
-    Combines multiple h5ad files into a single AnnData object.
-    """
-    adatas = [ad.read_h5ad(path) for path in tqdm(paths, desc="Loading h5ad files")]
-    
-    # Concatenate all AnnData objects
-    print("Combining AnnData objects...")
-    # TODO: check if the joining is correct here.
-    combined_adata = ad.concat(adatas, join='outer', label='celltype_object', keys=paths, pairwise=True, merge="unique")
-    print(f"Combined AnnData object shape: {combined_adata.shape}")
-
-    return combined_adata
-
+# Import the refactored functionality
+try:
+    from rosmap_processing.core.combine import combine_and_save
+    from rosmap_processing.utils.logging import setup_logging
+except ImportError as e:
+    print(f"Error: Could not import refactored module: {e}")
+    print("Please ensure the rosmap_processing package is installed.")
+    print("Run: pip install -e .")
+    sys.exit(1)
 
 if __name__ == "__main__":
-    print("Starting h5ad combining pipeline...")
-    print("Arguments:")
-    print(f"  Paths:")
-    for path in args.paths:
-        print(f"    - {path}")
-    print(f"  Output: {args.output}")
-    print("\n")
-
-    combined_adata = combine_h5ad(args.paths)
-
-    print("Saving combined AnnData object to:", args.output)
-    combined_adata.write_h5ad(args.output, compression='gzip')
-    print("Done.")
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="Combine all provided h5ad files into a single h5ad file."
+    )
+    parser.add_argument(
+        "paths",
+        type=str,
+        nargs="+",
+        help="Paths to the input h5ad files."
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        required=True,
+        help="Path to the output h5ad file. This will contain all the data from the input files."
+    )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging level"
+    )
+    
+    args = parser.parse_args()
+    
+    # Setup logging
+    logger = setup_logging(level=args.log_level)
+    
+    try:
+        # Convert paths to Path objects
+        input_paths = [Path(p) for p in args.paths]
+        output_path = Path(args.output)
+        
+        # Call the refactored function
+        combine_and_save(
+            input_paths=input_paths,
+            output_path=output_path
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to combine files: {e}", exc_info=True)
+        sys.exit(1)

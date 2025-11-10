@@ -1,188 +1,119 @@
-import anndata as ad
-import pandas as pd
-import numpy as np
+#!/usr/bin/env python3
+"""
+DEPRECATED: This script has been refactored into the rosmap_processing package.
 
-import argparse
+This wrapper maintains backward compatibility with existing workflows.
+The functionality has been moved to rosmap_processing.core.column_mapping module.
 
+For new code, please use:
+    from rosmap_processing.core.column_mapping import convert_columns
+"""
 
-parser = argparse.ArgumentParser(description="Script converting column names and types between SeaAD and ROSMAP data. \
-                                  It also adds the Wang label column that we try to predict")
-parser.add_argument(
-    "path",
-    type=str,
-    help="Path to the input h5ad file.",
+import sys
+import warnings
+from pathlib import Path
+
+warnings.warn(
+    "src/match_columns.py is deprecated and will be removed in v1.0. "
+    "Please use: python -m rosmap_processing.core.column_mapping",
+    DeprecationWarning,
+    stacklevel=2
 )
-parser.add_argument(
-    "--type",
-    type=str,
-    required=True,
-    help="Type of the input data, either \"ROSMAP\", \"ROSMAP_MIT\" or \"SeaAD\".",
-    choices=["ROSMAP", "ROSMAP_MIT", "SeaAD"],
-)
-parser.add_argument(
-    "--output",
-    type=str,
-    help="Path to the output h5ad file. This will contain the columns in both formats: \
-        ROSMAP format, which is numerically valued, and lowercase. \
-        And the SeaAD format, which contains mainly strings and is capitalized.",
-)
-parser.add_argument(
-    "--inplace",
-    action="store_true",
-    help="If set, the input file will be modified in place. This needs to be set if --output is not provided.",
-)
-parser.add_argument(
-    "--cellclass",
-    type=str,
-    help="Cell class for ROSMAP_MIT data (e.g., 'Neuron', 'Glia'). Required when --type is ROSMAP_MIT.",
-)
-parser.add_argument(
-    "--subclass",
-    type=str,
-    help="Cell subclass for ROSMAP_MIT data (e.g., 'Astrocytes', 'Excitatory'). Required when --type is ROSMAP_MIT.",
-)
-args = parser.parse_args()
 
-
-CLASS_NAME = "Class"
-SUBCLASS_NAME = "Celltype" 
-SUPERTYPE_NAME = "Subtype"  # the "state" or cluster
-
-
-def convert_rosmap(adata: ad.AnnData) -> None:
-    """
-    Adds the missing SeaAD-style columns (in-place) to the AnnData object.
-
-    - mit: bool, True if MIT data.
-    """
-
-    # ROSMAP (without metadata) has these:
-    # 'nCount_RNA', 'nFeature_RNA', 'nCount_SCT', 'nFeature_SCT', 'batch', 'individualID', 'DoubletFinder.score', 'subset', 'class', 'state'
-
-    adata.obs.rename(columns={
-        "individualID": "Donor ID",
-        # "Sex": "Sex",
-        # "Overall AD neuropathological Change": "ADNC",
-        # "Thal": "Thal",
-        # "CERAD score": "CERAD",
-        # "Overall CAA score": "CAA",
-        # "LATE": "LATE",
-        "class": CLASS_NAME,
-        "subset": SUBCLASS_NAME,
-        "state": SUPERTYPE_NAME,
-    }, inplace=True)
-
-    # TODO: also do the metadata columns
-
-
-
-def convert_rosmap_mit(adata: ad.AnnData, cellclass: str, subclass: str) -> None:
-    """
-    Adds the missing SeaAD-style columns (in-place) to the AnnData object.
-    This is a special case for the MIT data, which has different column names.
-    """
-
-    adata.obs.rename(columns={
-        "projid": "Donor ID",  # TODO: this might be a problem
-        "cell_type_high_resolution": SUPERTYPE_NAME,
-    }, inplace=True)
-
-    adata.obs[CLASS_NAME] = cellclass
-    adata.obs[SUBCLASS_NAME] = subclass
-
-    # TODO: also do the metadata columns
-
-
-def convert_seaad(adata: ad.AnnData) -> None:
-    """
-    Adds the missing ROSMAP-style columns (in-place) to the AnnData object.
-    """
-
-    adata.obs.rename(columns={
-        "Donor ID": "Donor ID",
-        "Sex": "Sex",
-        "Overall AD neuropathological Change": "ADNC",
-        "Thal": "Thal",
-        "CERAD score": "CERAD",
-        "Overall CAA score": "CAA",
-        "LATE": "LATE",
-        "Class": CLASS_NAME,
-        "Subclass": SUBCLASS_NAME,
-        "Supertype": SUPERTYPE_NAME,
-    }, inplace=True)
-    
-    adata.obs["braaksc"] = adata.obs["Braak"].map({
-        "Braak 0": 0,
-        "Braak I": 1,
-        "Braak II": 2,
-        "Braak III": 3,
-        "Braak IV": 4,
-        "Braak V": 5,
-        "Braak VI": 6,
-    })
-
-    # CERAD Score in SeaAD is the "amount of neuritic plaques", so we need to invert the mapping to correspond to the ROSMAP ceradsc column
-    adata.obs["ceradsc"] = adata.obs["CERAD"].map({  # ['Moderate', 'Absent', 'Reference', 'Frequent', 'Sparse']
-        "Absent": 4,
-        "Sparse": 3,
-        "Moderate": 2,
-        "Frequent": 1,
-        "Reference": 4,
-    })  
-
-    adata.obs["thalsc"] = adata.obs["Thal"].map({
-        "Thal 0": 0,
-        "Thal 1": 1,
-        "Thal 2": 2,
-        "Thal 3": 3,
-        "Thal 4": 4,
-        "Thal 5": 5,
-        "Thal 6": 6,
-    })
-
-    # Derive the Wang labels
-    adata.obs["Wang"] = "Intermediate"
-    adata.obs["Wang_intermediate"] = True  # These will be excluded
-
-    # SeaAD doesn't have the cogdx column, so we derive it from the cognitive status
-    adata.obs.loc[(adata.obs["Cognitive Status"] == "Dementia") & (adata.obs["braaksc"] >= 4) & (adata.obs["ceradsc"] <= 2), "Wang"] = "AD"
-    adata.obs.loc[(adata.obs["Cognitive Status"] == "Dementia") & (adata.obs["braaksc"] >= 4) & (adata.obs["ceradsc"] <= 2), "Wang_intermediate"] = False
-
-    adata.obs.loc[(adata.obs["Cognitive Status"] != "Dementia") & (adata.obs["braaksc"] <= 3) & (adata.obs["ceradsc"] >= 3), "Wang"] = "Healthy"
-    adata.obs.loc[(adata.obs["Cognitive Status"] != "Dementia") & (adata.obs["braaksc"] <= 3) & (adata.obs["ceradsc"] >= 3), "Wang_intermediate"] = False
-
-
+# Import the refactored functionality
+try:
+    from rosmap_processing.core.column_mapping import convert_columns
+    from rosmap_processing.utils.logging import setup_logging
+    import anndata as ad
+except ImportError as e:
+    print(f"Error: Could not import refactored module: {e}")
+    print("Please ensure the rosmap_processing package is installed.")
+    print("Run: pip install -e .")
+    sys.exit(1)
 
 if __name__ == "__main__":
-
-    print(f"Loading data from {args.path}...")
-    adata = ad.read_h5ad(args.path)
-
-    if not args.inplace and not args.output:
-        raise ValueError("Either --inplace or --output must be provided.")
-
-    if args.type == "ROSMAP":
-        print("Converting ROSMAP data to SeaAD format...")
-        convert_rosmap(adata)
-
-    elif args.type == "ROSMAP_MIT":
+    import argparse
     
-        # Then cellclass and subclass need to be added as an argument
-        if not args.cellclass or not args.subclass:
-            raise ValueError("For ROSMAP_MIT data, --cellclass and --subclass must be provided.")
-
-        print("Converting ROSMAP MIT data to SeaAD format...")
-        convert_rosmap_mit(adata, cellclass=args.cellclass, subclass=args.subclass)
-
-    else:
-        print("Converting SeaAD data to ROSMAP format...")
-        convert_seaad(adata)
-
-    print("Finished converting metadata columns.\n")
+    parser = argparse.ArgumentParser(
+        description="Script converting column names and types between SeaAD and ROSMAP data. "
+                    "It also adds the Wang label column that we try to predict"
+    )
+    parser.add_argument(
+        "path",
+        type=str,
+        help="Path to the input h5ad file."
+    )
+    parser.add_argument(
+        "--type",
+        type=str,
+        required=True,
+        help='Type of the input data, either "ROSMAP", "ROSMAP_MIT" or "SeaAD".',
+        choices=["ROSMAP", "ROSMAP_MIT", "SeaAD"]
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        help="Path to the output h5ad file. This will contain the columns in both formats: "
+             "ROSMAP format, which is numerically valued, and lowercase. "
+             "And the SeaAD format, which contains mainly strings and is capitalized."
+    )
+    parser.add_argument(
+        "--inplace",
+        action="store_true",
+        help="If set, the input file will be modified in place. "
+             "This needs to be set if --output is not provided."
+    )
+    parser.add_argument(
+        "--cellclass",
+        type=str,
+        help="Cell class for ROSMAP_MIT data (e.g., 'Neuron', 'Glia'). "
+             "Required when --type is ROSMAP_MIT."
+    )
+    parser.add_argument(
+        "--subclass",
+        type=str,
+        help="Cell subclass for ROSMAP_MIT data (e.g., 'Astrocytes', 'Excitatory'). "
+             "Required when --type is ROSMAP_MIT."
+    )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging level"
+    )
     
-    n_Wang_samples = adata[~adata.obs["Wang_intermediate"]].obs["Donor ID"].nunique()
-    print(f"Number of samples with Wang labels (so remaining samples after selecting extremes): {n_Wang_samples}")
-
-    print(f"\nSaving data to {args.output}...")
-    adata.write_h5ad(args.output, compression="gzip")
-    print("Done!")
+    args = parser.parse_args()
+    
+    # Setup logging
+    logger = setup_logging(level=args.log_level)
+    
+    try:
+        # Validate output arguments
+        if not args.inplace and not args.output:
+            raise ValueError("Either --inplace or --output must be provided")
+        
+        # Load data
+        input_path = Path(args.path)
+        logger.info(f"Loading data from {input_path}...")
+        adata = ad.read_h5ad(input_path)
+        
+        # Convert columns using refactored function
+        adata = convert_columns(
+            adata,
+            data_type=args.type,
+            cellclass=args.cellclass,
+            subclass=args.subclass
+        )
+        
+        # Determine output path
+        output_path = input_path if args.inplace else Path(args.output)
+        
+        # Save result
+        logger.info(f"Saving converted data to {output_path}...")
+        adata.write_h5ad(output_path, compression="gzip")
+        logger.info("Done!")
+        
+    except Exception as e:
+        logger.error(f"Failed to convert columns: {e}", exc_info=True)
+        sys.exit(1)
