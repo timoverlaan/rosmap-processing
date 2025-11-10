@@ -49,44 +49,30 @@ def add_metadata(
     logger.info(f"Is MIT data: {is_mit}")
     
     # Determine join column based on what's available
-    # For MIT data: h5ad has 'projid', metadata has 'individualID'
-    # For ROSMAP data: both have 'projid'
+    # Both MIT and non-MIT data should use 'projid' to join with rosmap_clinical.csv
+    # The rosmap_clinical.csv metadata file has both 'projid' and 'individualID' columns
     
     adata_col = None
     metadata_col = None
     
-    if is_mit:
-        # MIT data: h5ad has 'projid', metadata has 'individualID'
-        if "projid" in adata.obs.columns and "individualID" in metadata.columns:
-            adata_col = "projid"
-            metadata_col = "individualID"
-            logger.info(f"MIT data: using '{adata_col}' from h5ad, '{metadata_col}' from metadata")
-        elif "individualID" in adata.obs.columns and "individualID" in metadata.columns:
-            adata_col = "individualID"
-            metadata_col = "individualID"
-            logger.info(f"MIT data: using '{adata_col}' from both")
-        else:
-            raise ValueError(
-                f"Cannot find matching columns for MIT data. "
-                f"h5ad columns: {list(adata.obs.columns[:10])}... "
-                f"metadata columns: {list(metadata.columns[:10])}..."
-            )
+    # First, try to use 'projid' (preferred for both MIT and non-MIT)
+    if "projid" in adata.obs.columns and "projid" in metadata.columns:
+        adata_col = "projid"
+        metadata_col = "projid"
+        logger.info(f"Using 'projid' as join column")
+    # Fallback to individualID if projid not available
+    elif "individualID" in adata.obs.columns and "individualID" in metadata.columns:
+        adata_col = "individualID"
+        metadata_col = "individualID"
+        logger.info(f"Using 'individualID' as join column")
     else:
-        # Regular ROSMAP data: both should have 'projid'
-        if "projid" in adata.obs.columns:
-            adata_col = "projid"
-            metadata_col = "projid"
-            logger.info(f"Using 'projid' as join column")
-        elif "individualID" in adata.obs.columns:
-            adata_col = "individualID"
-            metadata_col = "individualID"
-            logger.info(f"Using 'individualID' as join column")
-        else:
-            available = list(adata.obs.columns[:10])
-            raise ValueError(
-                f"Neither 'projid' nor 'individualID' found in AnnData obs. "
-                f"Available columns: {available}..."
-            )
+        available_adata = list(adata.obs.columns[:10])
+        available_metadata = list(metadata.columns[:10])
+        raise ValueError(
+            f"Cannot find matching join column. "
+            f"h5ad columns: {available_adata}... "
+            f"metadata columns: {available_metadata}..."
+        )
     
     # Validate both columns exist
     if adata_col not in adata.obs.columns:

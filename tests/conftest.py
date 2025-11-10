@@ -24,7 +24,8 @@ def mit_h5ad_path(test_data_dir):
 @pytest.fixture(scope="session")
 def mit_metadata_path(test_data_dir):
     """Path to MIT metadata file."""
-    path = test_data_dir / "ROSMAP_MIT" / "MIT_ROSMAP_Multiomics_individual_metadata.csv"
+    # MIT data should use rosmap_clinical.csv, not the MIT-specific metadata
+    path = test_data_dir / "ROSMAP" / "rosmap_clinical.csv"
     if not path.exists():
         pytest.skip(f"Test metadata not found: {path}")
     return path
