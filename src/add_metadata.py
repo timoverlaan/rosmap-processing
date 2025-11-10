@@ -46,8 +46,6 @@ def add_metadata(adata: ad.AnnData, metadata: pd.DataFrame, mit: bool) -> None:
         how='left',
     )
 
-    adata.obs.to_csv(f"data/test_obs{'_mit' if mit else ''}.csv", index=True)  # For debugging, remove later
-
 
 if __name__ == "__main__":
     # Read the AnnData object

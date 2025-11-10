@@ -10,7 +10,6 @@ parser = argparse.ArgumentParser(description="Script converting column names and
 parser.add_argument(
     "path",
     type=str,
-    required=True,
     help="Path to the input h5ad file.",
 )
 parser.add_argument(
@@ -31,6 +30,16 @@ parser.add_argument(
     "--inplace",
     action="store_true",
     help="If set, the input file will be modified in place. This needs to be set if --output is not provided.",
+)
+parser.add_argument(
+    "--cellclass",
+    type=str,
+    help="Cell class for ROSMAP_MIT data (e.g., 'Neuron', 'Glia'). Required when --type is ROSMAP_MIT.",
+)
+parser.add_argument(
+    "--subclass",
+    type=str,
+    help="Cell subclass for ROSMAP_MIT data (e.g., 'Astrocytes', 'Excitatory'). Required when --type is ROSMAP_MIT.",
 )
 args = parser.parse_args()
 
@@ -159,11 +168,11 @@ if __name__ == "__main__":
     elif args.type == "ROSMAP_MIT":
     
         # Then cellclass and subclass need to be added as an argument
-        if not args.cellclass or not args.cellsubclass:
-            raise ValueError("For ROSMAP_MIT data, --cellclass and --cellsubclass must be provided.")
+        if not args.cellclass or not args.subclass:
+            raise ValueError("For ROSMAP_MIT data, --cellclass and --subclass must be provided.")
 
         print("Converting ROSMAP MIT data to SeaAD format...")
-        convert_rosmap_mit(adata, cellclass=args.cellclass, cellsubclass=args.cellsubclass)
+        convert_rosmap_mit(adata, cellclass=args.cellclass, subclass=args.subclass)
 
     else:
         print("Converting SeaAD data to ROSMAP format...")
