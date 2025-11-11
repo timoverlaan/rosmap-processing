@@ -75,7 +75,12 @@ def download_from_synapse(
                 downloadLocation=str(output_dir),
                 ifcollision="keep.local"
             )
-            downloaded_path = Path(entity.path)
+            # entity.path can be None if file already exists locally
+            if entity.path is None:
+                # Construct expected path from entity name
+                downloaded_path = output_dir / entity.name
+            else:
+                downloaded_path = Path(entity.path)
             downloaded_files.append(downloaded_path)
             logger.info(f"  → Saved to: {downloaded_path.name}")
         except Exception as e:
