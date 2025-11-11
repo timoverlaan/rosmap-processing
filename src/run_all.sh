@@ -20,7 +20,7 @@ echo ""
 
 # First download all the data (both ROSMAP and ROSMAP_MIT)
 echo "[Step 1/8] Downloading ROSMAP data from Synapse..."
-python -m rosmap_processing data download
+pixi run python -m rosmap_processing data download
 echo "✓ Download complete"
 echo ""
 
