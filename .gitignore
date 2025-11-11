@@ -14,14 +14,13 @@ data/
 token.txt
 .env
 *.secret
+config.yaml  # User-specific config (use config/default_config.yaml as template)
 
 # Output directories
 output/
-logs/
 *.log
 
 # SLURM outputs
-slurm/logs/
 slurm/out/
 *.out
 
@@ -78,8 +77,3 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb_checkpoints
-
-token.txt
-
-
-test_output/

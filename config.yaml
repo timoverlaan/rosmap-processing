@@ -1,4 +1,6 @@
-# Default ROSMAP Processing Configuration
+# ROSMAP Processing Configuration
+# This file controls all processing parameters
+# Edit this file to customize your processing run
 
 dataset_name: "ROSMAP"
 dataset_type: "single-cell-rnaseq"

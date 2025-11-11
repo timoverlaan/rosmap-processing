@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from rosmap_processing.utils.logging import setup_logging, get_logger
+from rosmap_processing.utils.config import load_config
 
 
 def main():
@@ -22,6 +23,13 @@ def main():
         "-v", "--verbose",
         action="store_true",
         help="Enable verbose logging"
+    )
+    
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to config file (optional, uses defaults if not provided)"
     )
     
     subparsers = parser.add_subparsers(

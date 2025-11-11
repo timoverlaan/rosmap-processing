@@ -38,7 +38,17 @@ This pipeline processes single-cell RNA-seq data from the ROSMAP (Religious Orde
    pixi install
    ```
 
-3. **Set up authentication:**
+3. **Set up configuration:**
+   
+   Copy the default config and customize it:
+   ```bash
+   cp config/default_config.yaml config.yaml
+   # Edit config.yaml to adjust processing parameters
+   ```
+   
+   See [config/README.md](config/README.md) for configuration details.
+
+4. **Set up authentication:**
    
    Create a `token.txt` file with your Synapse token:
    ```bash
@@ -50,9 +60,9 @@ This pipeline processes single-cell RNA-seq data from the ROSMAP (Religious Orde
    export SYNAPSE_AUTH_TOKEN="your_synapse_token"
    ```
    
-   **⚠️ Important:** Never commit `token.txt` to git!
+   **⚠️ Important:** Never commit `token.txt` or `config.yaml` to git!
 
-4. **Build the container (on cluster):**
+5. **Build the container (on cluster):**
    ```bash
    # Submit container build job
    sbatch slurm/build_container.sh

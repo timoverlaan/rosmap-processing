@@ -2,9 +2,12 @@
 
 import os
 import yaml
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from .logging import get_logger
 
@@ -33,8 +36,12 @@ class PathsConfig:
     processed: Path = Path("data/processed")
     interim: Path = Path("data/interim")
     metadata: Path = Path("data/metadata")
-    output: Path = Path("output")
-    logs: Path = Path("logs")
+    output_base: Path = Path("output")  # Base output directory
+    logs_base: Path = Path("logs")      # Base logs directory
+    
+    # These will be set dynamically per run
+    output: Optional[Path] = None
+    logs: Optional[Path] = None
     
     def __post_init__(self):
         """Convert string paths to Path objects."""
@@ -42,8 +49,74 @@ class PathsConfig:
         self.processed = Path(self.processed)
         self.interim = Path(self.interim)
         self.metadata = Path(self.metadata)
-        self.output = Path(self.output)
-        self.logs = Path(self.logs)
+        self.output_base = Path(self.output_base)
+        self.logs_base = Path(self.logs_base)
+        
+        # Set output and logs to base if not specified
+        if self.output is None:
+            self.output = self.output_base
+        else:
+            self.output = Path(self.output)
+            
+        if self.logs is None:
+            self.logs = self.logs_base
+        else:
+            self.logs = Path(self.logs)
+    
+    def setup_run_directories(
+        self, 
+        run_name: Optional[str] = None,
+        job_id: Optional[str] = None,
+        timestamp: Optional[str] = None
+    ) -> tuple[Path, Path]:
+        """
+        Create output and log directories for a specific run.
+        
+        Parameters
+        ----------
+        run_name : str, optional
+            Name of the run (e.g., "rosmap_processing", "seaad_pipeline")
+        job_id : str, optional
+            SLURM job ID (if running on cluster)
+        timestamp : str, optional
+            Timestamp string. If None, uses current time.
+            
+        Returns
+        -------
+        output_dir : Path
+            Path to output directory for this run
+        log_dir : Path
+            Path to log directory for this run
+        """
+        if timestamp is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Build directory name
+        dir_parts = []
+        if run_name:
+            dir_parts.append(run_name)
+        if job_id:
+            dir_parts.append(f"job_{job_id}")
+        dir_parts.append(timestamp)
+        
+        dir_name = "_".join(dir_parts)
+        
+        # Create directories
+        output_dir = self.output_base / dir_name
+        log_dir = output_dir / "logs"  # Put logs inside output directory
+        
+        output_dir.mkdir(parents=True, exist_ok=True)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Update current paths
+        self.output = output_dir
+        self.logs = log_dir
+        
+        logger.info(f"Created run directories:")
+        logger.info(f"  Output: {output_dir}")
+        logger.info(f"  Logs: {log_dir}")
+        
+        return output_dir, log_dir
 
 
 @dataclass
@@ -192,6 +265,125 @@ class Config:
             yaml.dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)
         
         logger.info(f"Configuration saved to {yaml_path}")
+    
+    def setup_run(
+        self,
+        run_name: Optional[str] = None,
+        job_id: Optional[str] = None,
+        timestamp: Optional[str] = None,
+        save_git_info: bool = True,
+        copy_config: bool = True,
+        config_source: Optional[Path] = None
+    ) -> tuple[Path, Path]:
+        """
+        Set up directories and metadata for a processing run.
+        
+        Creates timestamped output and log directories, saves git commit hash,
+        and copies the configuration file to the output directory.
+        
+        Parameters
+        ----------
+        run_name : str, optional
+            Name of the run (e.g., "rosmap_processing", "seaad_pipeline")
+        job_id : str, optional
+            SLURM job ID (if running on cluster)
+        timestamp : str, optional
+            Timestamp string. If None, uses current time.
+        save_git_info : bool, default=True
+            Save git commit hash and status to output directory
+        copy_config : bool, default=True
+            Copy configuration file to output directory
+        config_source : Path, optional
+            Source config file to copy. If None, saves current config.
+            
+        Returns
+        -------
+        output_dir : Path
+            Path to output directory for this run
+        log_dir : Path
+            Path to log directory for this run
+        """
+        # Create directories
+        output_dir, log_dir = self.paths.setup_run_directories(
+            run_name=run_name,
+            job_id=job_id,
+            timestamp=timestamp
+        )
+        
+        # Save git information
+        if save_git_info:
+            self._save_git_info(output_dir)
+        
+        # Copy or save configuration
+        if copy_config:
+            config_dest = output_dir / "config.yaml"
+            if config_source and Path(config_source).exists():
+                shutil.copy2(config_source, config_dest)
+                logger.info(f"Copied config from {config_source} to {config_dest}")
+            else:
+                self.save(config_dest)
+                logger.info(f"Saved current config to {config_dest}")
+        
+        return output_dir, log_dir
+    
+    def _save_git_info(self, output_dir: Path) -> None:
+        """
+        Save git commit hash and status to output directory.
+        
+        Parameters
+        ----------
+        output_dir : Path
+            Directory to save git information
+        """
+        git_info_file = output_dir / "git_info.txt"
+        
+        try:
+            # Get git commit hash
+            commit_hash = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True
+            ).stdout.strip()
+            
+            # Get git branch
+            branch = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True
+            ).stdout.strip()
+            
+            # Get git status (check for uncommitted changes)
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                check=True
+            ).stdout.strip()
+            
+            # Write to file
+            with open(git_info_file, "w") as f:
+                f.write(f"Git Commit Hash: {commit_hash}\n")
+                f.write(f"Branch: {branch}\n")
+                f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+                f.write("\n")
+                
+                if status:
+                    f.write("WARNING: Uncommitted changes detected:\n")
+                    f.write(status)
+                    f.write("\n")
+                    logger.warning("Git repository has uncommitted changes!")
+                else:
+                    f.write("Repository is clean (no uncommitted changes)\n")
+            
+            logger.info(f"Git info saved to {git_info_file}")
+            logger.info(f"Commit: {commit_hash[:8]} on branch '{branch}'")
+            
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logger.warning(f"Could not save git info: {e}")
+            with open(git_info_file, "w") as f:
+                f.write(f"Git information not available: {e}\n")
 
 
 def load_config(config_path: Optional[Path] = None) -> Config:

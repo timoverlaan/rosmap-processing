@@ -4,7 +4,7 @@ channels = ["conda-forge"]
 description = "Reproducible environment for processing the ROSMAP dataset"
 name = "rosmap-processing"
 platforms = ["win-64", "linux-64"]
-version = "0.1.2"
+version = "0.1.3"
 
 [system-requirements]
 linux = "3.10"  # Lower for older kernel on DAIC
@@ -31,6 +31,7 @@ scanpy = ">=1.11.2,<2"
 python-igraph = ">=0.11.8,<0.12"
 leidenalg = ">=0.10.2,<0.11"
 openpyxl = ">=3.1.5,<4"
+pyyaml = ">=6.0,<7"
 
 [pypi-dependencies]
 synapseclient = ">=4.7.0"

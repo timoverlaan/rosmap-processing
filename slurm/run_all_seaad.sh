@@ -7,14 +7,16 @@
 #SBATCH --cpus-per-task=4   # Request number of CPUs (threads) per task. Default is 1 (note: CPUs are always allocated to jobs per 2).
 #SBATCH --mem=400GB          # Request memory (MB) per node. Default is 1024MB (1GB). For multiple tasks, specify --mem-per-cpu instead
 #SBATCH --mail-type=END     # Set mail type to 'END' to receive a mail when the job finishes. 
-#SBATCH --output=slurm/out/%j_all.out # Set name of output log. %j is the Slurm jobId
-#SBATCH --error=slurm/out/%j_all.out # Set name of error log. %j is the Slurm jobId
+#SBATCH --output=slurm/out/%j_seaad.out # Set name of output log. %j is the Slurm jobId
+#SBATCH --error=slurm/out/%j_seaad.err # Set name of error log. %j is the Slurm jobId
 /usr/bin/scontrol show job -d "$SLURM_JOB_ID"  # check sbatch directives are working
 
 apptainer exec --writable-tmpfs --pwd /opt/app --containall \
 	--bind src/:/opt/app/src/ \
 	--bind data/:/opt/app/data/ \
-	--bind out/:/opt/app/out/ \
+	--bind output/:/opt/app/output/ \
+	--bind config.yaml:/opt/app/config.yaml \
 	--bind token.txt:/opt/app/token.txt \
 	--env PYTHONPATH=/opt/app/src \
-	./container_pixi.sif sh ./src/run_all_seaad.sh
+	--env SLURM_JOB_ID=${SLURM_JOB_ID} \
+	./container_pixi_0-1-3.sif sh ./src/run_all_seaad.sh
