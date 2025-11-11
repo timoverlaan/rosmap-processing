@@ -14,7 +14,7 @@ data/
 token.txt
 .env
 *.secret
-config.yaml  # User-specific config (use config/default_config.yaml as template)
+config.yaml
 
 # Output directories
 output/
