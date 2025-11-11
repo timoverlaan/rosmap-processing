@@ -12,7 +12,7 @@ echo ""
 
 # Set up run directories and save config/git info
 echo "Setting up run directories..."
-RUN_INFO=$(python src/setup_run.py --config config.yaml --run-name rosmap_processing)
+RUN_INFO=$(pixi run python src/setup_run.py --config config.yaml --run-name rosmap_processing)
 eval "$RUN_INFO"
 echo "Output directory: ${OUTPUT_DIR}"
 echo "Log directory: ${LOG_DIR}"
