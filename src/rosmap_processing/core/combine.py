@@ -8,7 +8,7 @@ validation and error handling.
 
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import anndata as ad
 from tqdm import tqdm

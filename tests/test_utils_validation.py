@@ -1,9 +1,6 @@
 """Unit tests for the validation module."""
 
 import pytest
-import anndata as ad
-import numpy as np
-import pandas as pd
 from pathlib import Path
 from rosmap_processing.utils.validation import (
     check_h5ad_structure,

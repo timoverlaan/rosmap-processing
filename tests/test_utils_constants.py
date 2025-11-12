@@ -1,6 +1,5 @@
 """Unit tests for the constants module."""
 
-import pytest
 from rosmap_processing.utils.constants import (
     MIN_GENES_PER_CELL,
     MIN_CELLS_PER_GENE,

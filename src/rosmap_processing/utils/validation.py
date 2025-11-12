@@ -8,11 +8,8 @@ including metadata, data matrices, and basic statistics.
 
 import sys
 from pathlib import Path
-from typing import Optional, List
-
 import anndata as ad
 import numpy as np
-import pandas as pd
 
 from ..utils.logging import get_logger
 

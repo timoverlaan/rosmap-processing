@@ -5,7 +5,6 @@ These tests require actual data files to be present and may take longer to run.
 
 import pytest
 import shutil
-from pathlib import Path
 from rosmap_processing.data.category_fix import fix_categories_in_file
 from rosmap_processing.data.metadata import add_metadata_to_file
 from rosmap_processing.core.column_mapping import convert_columns
@@ -56,10 +55,8 @@ def test_add_metadata_integration_mit(mit_h5ad_path, mit_metadata_path, temp_out
     
     # Check if metadata was successfully merged
     expected_cols = ["sex", "ageDeath", "diagnosis"]
-    metadata_merged = False
     for col in expected_cols:
         if col in adata.obs.columns and adata.obs[col].notna().any():
-            metadata_merged = True
             break
     
     # The function should complete without errors

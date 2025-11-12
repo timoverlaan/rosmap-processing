@@ -8,7 +8,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from rosmap_processing.utils.logging import setup_logging, get_logger
-from rosmap_processing.utils.config import load_config
 
 
 def main():
@@ -44,7 +43,7 @@ def main():
     data_subparsers = data_parser.add_subparsers(dest="data_command", required=True)
     
     # data download
-    download_parser = data_subparsers.add_parser("download", help="Download ROSMAP data from Synapse")
+    data_subparsers.add_parser("download", help="Download ROSMAP data from Synapse")
     
     # data category-fix
     category_parser = data_subparsers.add_parser("category-fix", help="Fix categorical columns and remove raw data")
@@ -137,21 +136,22 @@ def handle_data_command(args):
         download_rosmap_data()
         
     elif args.data_command == "category-fix":
-        from rosmap_processing.data.category_fix import fix_categories
+        from rosmap_processing.data.category_fix import fix_categories_in_file
+        from pathlib import Path
         logger.info(f"Fixing categories in {args.input}")
-        fix_categories(
-            input_path=args.input,
+        fix_categories_in_file(
+            input_path=Path(args.input),
             columns=args.columns,
             remove_raw=args.remove_raw
         )
         
     elif args.data_command == "metadata":
-        from rosmap_processing.data.metadata import add_metadata
+        from rosmap_processing.data.metadata import add_metadata_to_file
         logger.info(f"Adding metadata to {args.input}")
-        add_metadata(
+        add_metadata_to_file(
             h5ad_path=args.input,
             metadata_path=args.metadata,
-            mit=args.mit
+            is_mit=args.mit
         )
 
 
@@ -160,11 +160,12 @@ def handle_core_command(args):
     logger = get_logger(__name__)
     
     if args.core_command == "combine":
-        from rosmap_processing.core.combine import combine_h5ad_files
+        from rosmap_processing.core.combine import combine_and_save
+        from pathlib import Path
         logger.info(f"Combining {len(args.inputs)} files...")
-        combine_h5ad_files(
-            input_paths=args.inputs,
-            output_path=args.output
+        combine_and_save(
+            input_paths=[Path(p) for p in args.inputs],
+            output_path=Path(args.output)
         )
         
     elif args.core_command == "column-mapping":
