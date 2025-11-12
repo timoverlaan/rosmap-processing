@@ -9,6 +9,12 @@ if (length(args) == 0) {
   stop("Usage: Rscript h5Seurat_to_h5ad.R file1.h5Seurat file2.h5Seurat ...")
 }
 
+# Use current directory for temp files instead of /tmp (which may be full)
+# This ensures we have enough space for large h5Seurat files
+temp_dir <- file.path(getwd(), ".temp_conversion")
+dir.create(temp_dir, showWarnings = FALSE, recursive = TRUE)
+Sys.setenv(TMPDIR = temp_dir)
+
 # Iterate over each provided .h5Seurat file
 for (h5Seurat_path in args) {
   # Derive the base name without the .h5Seurat extension
@@ -47,3 +53,8 @@ for (h5Seurat_path in args) {
   # free up memory
   gc()
 }
+
+# Clean up temp directory at the end
+cat("Cleaning up temporary directory...\n")
+unlink(temp_dir, recursive = TRUE)
+cat("✓ Conversion complete\n")
