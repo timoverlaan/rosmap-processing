@@ -29,12 +29,20 @@ for (h5Seurat_path in args) {
     if (is.factor(x)) as.character(x) else x
   })
   
-  # Save changes back to .h5Seurat (overwrite is necessary)
-  SaveH5Seurat(seurat_obj, filename = h5Seurat_path, overwrite = TRUE)
-
-
-  # Perform the conversion
-  Convert(h5Seurat_path, dest = "h5ad", assay = "RNA", overwrite = TRUE)
+  # Save directly to h5ad using SaveH5Seurat -> Convert workflow
+  # We use a temporary file to avoid corrupting the original
+  temp_h5seurat <- tempfile(fileext = ".h5Seurat")
+  SaveH5Seurat(seurat_obj, filename = temp_h5seurat, overwrite = TRUE)
+  
+  # Perform the conversion from temp file
+  Convert(temp_h5seurat, dest = "h5ad", assay = "RNA", overwrite = TRUE)
+  
+  # Move the resulting h5ad file to the correct location
+  temp_h5ad <- sub("\\.h5Seurat$", ".h5ad", temp_h5seurat)
+  file.rename(temp_h5ad, h5ad_path)
+  
+  # Clean up temp file
+  file.remove(temp_h5seurat)
 
   # free up memory
   gc()
