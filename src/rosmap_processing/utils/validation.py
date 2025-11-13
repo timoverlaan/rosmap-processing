@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 import anndata as ad
 import numpy as np
+from typing import Union
 
 from ..utils.logging import get_logger
 
@@ -253,6 +254,16 @@ def check_h5ad_file(
         results["matrix"] = check_data_matrix(adata, preview_size=preview_size)
     
     return results
+
+
+def inspect_h5ad(path: Union[str, Path]):
+    """Compatibility wrapper used by the CLI.
+
+    Accepts a string or Path and runs the full h5ad checks, logging errors
+    and raising exceptions on failure so the CLI can handle the exit.
+    """
+    file_path = Path(path)
+    return check_h5ad_file(file_path)
 
 
 def main():
