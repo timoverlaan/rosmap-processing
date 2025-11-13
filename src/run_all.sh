@@ -130,34 +130,34 @@ pixi run python -m rosmap_processing utils validate data/raw/ROSMAP/combined.h5a
 echo "✓ Combining complete"
 echo ""
 
-# Add metadata to all h5ad files using rosmap_clinical.csv
+# Add metadata to all h5ad files using ROSMAP_clinical.csv
 
 # MIT files
 echo "[Step 7/8] Adding metadata to h5ad files..."
 echo "  - Adding metadata to MIT files..."
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Astrocytes.h5ad data/raw/ROSMAP/rosmap_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Excitatory_neurons_set1.h5ad data/raw/ROSMAP/rosmap_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Excitatory_neurons_set2.h5ad data/raw/ROSMAP/rosmap_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Excitatory_neurons_set3.h5ad data/raw/ROSMAP/rosmap_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Immune_cells.h5ad data/raw/ROSMAP/rosmap_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Inhibitory_neurons.h5ad data/raw/ROSMAP/rosmap_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/OPCs.h5ad data/raw/ROSMAP/rosmap_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Oligodendrocytes.h5ad data/raw/ROSMAP/rosmap_clinical.csv --mit
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Astrocytes.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Excitatory_neurons_set1.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Excitatory_neurons_set2.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Excitatory_neurons_set3.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Immune_cells.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Inhibitory_neurons.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/OPCs.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Oligodendrocytes.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
 
 # ROSMAP files
 echo "  - Adding metadata to ROSMAP files..."
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/astrocytes.h5ad data/raw/ROSMAP/rosmap_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/cux2+.h5ad data/raw/ROSMAP/rosmap_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/cux2-.h5ad data/raw/ROSMAP/rosmap_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/inhibitory.h5ad data/raw/ROSMAP/rosmap_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/microglia.h5ad data/raw/ROSMAP/rosmap_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/oligodendroglia.h5ad data/raw/ROSMAP/rosmap_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/vascular.niche.h5ad data/raw/ROSMAP/rosmap_clinical.csv
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/astrocytes.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/cux2+.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/cux2-.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/inhibitory.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/microglia.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/oligodendroglia.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/vascular.niche.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
 
 # Combined files
 echo "  - Adding metadata to combined files..."
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/combined.h5ad data/raw/ROSMAP/rosmap_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/combined.h5ad data/raw/ROSMAP/rosmap_clinical.csv --mit
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/combined.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
+pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/combined.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
 
 # Validate combined files
 pixi run python -m rosmap_processing utils validate data/raw/ROSMAP/combined.h5ad
