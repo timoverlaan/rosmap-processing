@@ -1,10 +1,7 @@
 """Unit tests for column mapping module."""
 
-import pytest
-import anndata as ad
 import pandas as pd
 from rosmap_processing.core.column_mapping import (
-    convert_rosmap_columns,
     convert_rosmap_mit_columns,
     convert_seaad_columns,
     derive_wang_labels

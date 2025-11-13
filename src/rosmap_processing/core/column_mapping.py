@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Optional
 
 import anndata as ad
-import pandas as pd
 
 from ..utils.logging import get_logger
 from ..utils.constants import (

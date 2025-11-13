@@ -1,8 +1,5 @@
 """Unit tests for the category fix module."""
 
-import pytest
-import anndata as ad
-import pandas as pd
 from rosmap_processing.data.category_fix import fix_categories
 
 

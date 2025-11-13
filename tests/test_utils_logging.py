@@ -1,7 +1,6 @@
 """Unit tests for the logging utility module."""
 
 import pytest
-from pathlib import Path
 from rosmap_processing.utils.logging import setup_logging, get_logger
 
 

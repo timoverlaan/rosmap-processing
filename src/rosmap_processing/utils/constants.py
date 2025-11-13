@@ -105,3 +105,37 @@ THAL_MAPPING = {
     "Thal 5": 5,
     "Thal 6": 6,
 }
+
+# Define __all__ to control what gets exported with "from constants import *"
+__all__ = [
+    # Processing thresholds
+    "MIN_GENES_PER_CELL",
+    "MIN_CELLS_PER_GENE",
+    "DEFAULT_HVG_COUNT",
+    "DEFAULT_K_NEIGHBORS",
+    "DEFAULT_PCA_COMPONENTS",
+    # Normalization
+    "CPM_TARGET",
+    # Column names
+    "CLASS_NAME",
+    "SUBCLASS_NAME",
+    "SUPERTYPE_NAME",
+    "DONOR_ID_COLUMN",
+    # Synapse IDs
+    "SYNAPSE_IDS_ROSMAP",
+    "SYNAPSE_IDS_ROSMAP_MIT",
+    # File extensions
+    "VALID_H5AD_EXTENSIONS",
+    "VALID_H5SEURAT_EXTENSIONS",
+    "VALID_RDS_EXTENSIONS",
+    "VALID_TXT_EXTENSIONS",
+    # SeaAD S3
+    "SEAAD_S3_BUCKET",
+    "SEAAD_S3_PATHS",
+    # Cell type mappings
+    "ROSMAP_MIT_CELL_CLASSES",
+    # Pathology mappings
+    "BRAAK_MAPPING",
+    "CERAD_MAPPING",
+    "THAL_MAPPING",
+]
