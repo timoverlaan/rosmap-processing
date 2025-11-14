@@ -1,0 +1,43 @@
+# Default ROSMAP Processing Configuration
+
+dataset_name: "ROSMAP"
+dataset_type: "single-cell-rnaseq"
+
+processing:
+  # Filtering thresholds
+  min_genes: 200              # Minimum genes per cell
+  min_cells: 5                # Minimum cells expressing a gene
+  
+  # Feature selection
+  n_hvgs: 2000                # Number of highly variable genes
+  
+  # Neighborhood graph
+  k_neighbors: 30             # Number of neighbors for KNN graph
+  n_pca_components: 50        # Number of PCA components
+  
+  # Normalization
+  target_sum: 1000000         # CPM normalization target (1 million)
+  log_transform: true         # Apply log1p transformation
+  
+  # Processing options
+  individual_pca: false       # Compute PCA per donor (vs. global)
+
+paths:
+  raw_data: "data/raw"
+  processed: "data/processed"
+  interim: "data/interim"
+  metadata: "data/metadata"
+  output_base: "output"         # Base directory for all output runs
+  logs_base: "logs"              # Base directory for all log runs (logs go in output dir by default)
+  # Note: Each run creates timestamped subdirectory with logs inside
+
+synapse:
+  # Use SYNAPSE_AUTH_TOKEN environment variable if available
+  use_env_token: true
+  # Fallback to token.txt file (not checked into git)
+  token_file: "token.txt"
+
+logging:
+  level: "INFO"               # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  log_to_file: true

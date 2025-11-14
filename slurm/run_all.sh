@@ -14,6 +14,9 @@
 apptainer exec --writable-tmpfs --pwd /opt/app --containall \
 	--bind src/:/opt/app/src/ \
 	--bind data/:/opt/app/data/ \
-	--bind out/:/opt/app/out/ \
+	--bind output/:/opt/app/output/ \
+	--bind config.yaml:/opt/app/config.yaml \
 	--bind token.txt:/opt/app/token.txt \
-	./container_pixi.sif sh ./src/run_all.sh
+	--env PYTHONPATH=/opt/app/src \
+	--env SLURM_JOB_ID=${SLURM_JOB_ID} \
+	./container_pixi_0-1-3.sif sh ./src/run_all.sh

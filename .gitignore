@@ -1,5 +1,7 @@
 # large data files
 data/
+# But include source code in the rosmap_processing package
+!src/rosmap_processing/data/
 
 # apptainer files
 *.sif
@@ -8,3 +10,70 @@ data/
 .pixi
 *.egg-info
 
+# Secrets and tokens
+token.txt
+.env
+*.secret
+config.yaml
+
+# Output directories
+output/
+*.log
+
+# SLURM outputs
+slurm/out/
+*.out
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.cover
+.hypothesis/
+test_output/
+
+# Virtual environments
+venv/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
