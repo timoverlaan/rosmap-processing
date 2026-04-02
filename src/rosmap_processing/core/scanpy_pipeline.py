@@ -247,14 +247,14 @@ def process_h5ad(
             logger.info(f"Selecting {hvg_after_import} highly variable genes within imported set")
             sc.pp.highly_variable_genes(
                 adata,
-                flavor='seurat_v3',
+                flavor='seurat',
                 n_top_genes=hvg_after_import,
                 subset=False,
             )
 
             # Write full ranked HVG list before slicing
             hvg_scores_path = output_path.with_name(output_path.stem + "_hvg_scores.tsv")
-            score_cols = [c for c in ['highly_variable', 'highly_variable_rank', 'variances_norm', 'variances'] if c in adata.var.columns]
+            score_cols = [c for c in ['highly_variable', 'highly_variable_rank', 'dispersions_norm', 'dispersions', 'variances_norm', 'variances'] if c in adata.var.columns]
             hvg_df = adata.var[score_cols].copy()
             hvg_df = hvg_df.sort_values('highly_variable_rank')
             hvg_df.to_csv(hvg_scores_path, sep='\t')
@@ -271,7 +271,7 @@ def process_h5ad(
         logger.info(f"Selecting {n_hvgs} highly variable genes")
         sc.pp.highly_variable_genes(
             adata,
-            flavor='seurat_v3',
+            flavor='seurat',
             n_top_genes=n_hvgs,
             subset=True
         )
