@@ -304,7 +304,7 @@ def process_h5ad(
             adata = adata[:, adata.var['highly_variable']].copy()
             logger.info(f"Shape after HVG selection: {adata.shape}")
 
-    else:
+    elif hvg_after_normalize is None:
         logger.info(f"Selecting {n_hvgs} highly variable genes")
         hvg_flavor = detect_hvg_flavor(adata)
         sc.pp.highly_variable_genes(
