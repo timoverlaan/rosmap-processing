@@ -271,7 +271,7 @@ def process_h5ad(
         logger.info(f"Selecting {n_hvgs} highly variable genes")
         sc.pp.highly_variable_genes(
             adata,
-            flavor='seurat',
+            flavor='seurat_v3',
             n_top_genes=n_hvgs,
             subset=True
         )
