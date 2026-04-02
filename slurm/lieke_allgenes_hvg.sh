@@ -46,10 +46,12 @@ extract_genes() {
         --env OUT_FILE="${1%.h5ad}_gene_names.txt" \
         ./container_pixi_0-1-3.sif pixi run python -c '
 import anndata, os
-adata = anndata.read_h5ad(os.environ["H5AD_FILE"], backed="r")
-with open(os.environ["OUT_FILE"], "w") as f:
+h5ad_file = os.environ["H5AD_FILE"]
+out_file = os.environ["OUT_FILE"]
+adata = anndata.read_h5ad(h5ad_file, backed="r")
+with open(out_file, "w") as f:
     f.write("\n".join(adata.var_names) + "\n")
-print(f"Wrote {len(adata.var_names)} gene names to {os.environ[\"OUT_FILE\"]}")
+print(f"Wrote {len(adata.var_names)} gene names to {out_file}")
 '
 }
 
