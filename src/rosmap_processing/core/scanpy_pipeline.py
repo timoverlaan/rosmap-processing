@@ -102,6 +102,7 @@ def process_h5ad(
     k_neighbors: int = DEFAULT_K_NEIGHBORS,
     individual_pca: bool = False,
     import_genes: Optional[Union[str, Path]] = None,
+    hvg_after_import: Optional[int] = None,
     min_genes: int = MIN_GENES_PER_CELL,
     min_cells: int = MIN_CELLS_PER_GENE,
     n_pca_components: int = DEFAULT_PCA_COMPONENTS,
@@ -159,6 +160,8 @@ def process_h5ad(
     logger.info(f"Individual PCA: {individual_pca}")
     if import_genes:
         logger.info(f"Import genes from: {import_genes}")
+    if hvg_after_import is not None:
+        logger.info(f"HVG selection after import: {hvg_after_import} genes")
     logger.info("")
     
     # Validate input file
@@ -229,7 +232,30 @@ def process_h5ad(
         logger.info(f"Selecting {len(overlap)} genes from import list")
         adata = adata[:, adata.var_names.isin(overlap)].copy()
         logger.info(f"Shape after gene selection: {adata.shape}")
-        
+
+        if hvg_after_import is not None:
+            logger.info(f"Selecting {hvg_after_import} highly variable genes within imported set")
+            sc.pp.highly_variable_genes(
+                adata,
+                flavor='seurat_v3',
+                n_top_genes=hvg_after_import,
+                subset=False,
+            )
+
+            # Write full ranked HVG list before slicing
+            hvg_scores_path = output_path.with_name(output_path.stem + "_hvg_scores.tsv")
+            hvg_df = adata.var[['highly_variable', 'highly_variable_rank', 'dispersions_norm']].copy()
+            hvg_df = hvg_df.sort_values('highly_variable_rank')
+            hvg_df.to_csv(hvg_scores_path, sep='\t')
+            logger.info(f"Wrote full HVG scores ({len(hvg_df)} genes) to {hvg_scores_path}")
+
+            hvg_names_path = output_path.with_name(output_path.stem + "_hvg_names.txt")
+            hvg_names_path.write_text('\n'.join(hvg_df.index) + '\n')
+            logger.info(f"Wrote full HVG gene names to {hvg_names_path}")
+
+            adata = adata[:, adata.var['highly_variable']].copy()
+            logger.info(f"Shape after HVG selection: {adata.shape}")
+
     else:
         logger.info(f"Selecting {n_hvgs} highly variable genes")
         sc.pp.highly_variable_genes(
@@ -374,6 +400,12 @@ if __name__ == "__main__":
         help="Path to a TXT or AnnData file to use the genes from. This overrides HVG selection."
     )
     parser.add_argument(
+        "--hvg-after-import",
+        type=int,
+        default=None,
+        help="If set alongside --import-genes, further select N HVGs within the imported gene subset."
+    )
+    parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
@@ -397,6 +429,7 @@ if __name__ == "__main__":
             k_neighbors=args.k_neighbors,
             individual_pca=args.individual_pca,
             import_genes=args.import_genes,
+            hvg_after_import=args.hvg_after_import,
         )
     except Exception as e:
         logger.error(f"Pipeline failed: {e}", exc_info=True)
