@@ -174,6 +174,16 @@ def process_h5ad(
     logger.info(f"Loading h5ad file: {input_path}")
     adata = ad.read_h5ad(input_path)
     logger.info(f"Loaded: {adata}")
+
+    # Diagnostic: show a small slice of X to reveal value types
+    import numpy as np
+    x_slice = adata.X[:5, :5]
+    if hasattr(x_slice, 'toarray'):
+        x_slice = x_slice.toarray()
+    logger.info(f"X[0:5, 0:5] sample values:\n{x_slice}")
+    logger.info(f"X dtype: {adata.X.dtype}, min={adata.X.min():.4f}, max={adata.X.max():.4f}")
+    if adata.layers:
+        logger.info(f"Available layers: {list(adata.layers.keys())}")
     
     # Handle raw data
     if use_raw:
