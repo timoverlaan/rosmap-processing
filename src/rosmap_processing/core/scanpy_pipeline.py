@@ -134,6 +134,7 @@ def process_h5ad(
     individual_pca: bool = False,
     import_genes: Optional[Union[str, Path]] = None,
     hvg_after_import: Optional[int] = None,
+    hvg_after_normalize: Optional[int] = None,
     min_genes: int = MIN_GENES_PER_CELL,
     min_cells: int = MIN_CELLS_PER_GENE,
     n_pca_components: int = DEFAULT_PCA_COMPONENTS,
@@ -192,9 +193,13 @@ def process_h5ad(
     if import_genes:
         logger.info(f"Import genes from: {import_genes}")
     if hvg_after_import is not None:
-        logger.info(f"HVG selection after import: {hvg_after_import} genes")
+        logger.info(f"HVG selection after import (pre-norm, seurat_v3): {hvg_after_import} genes")
+    if hvg_after_normalize is not None:
+        logger.info(f"HVG selection after normalization (seurat): {hvg_after_normalize} genes")
+    if hvg_after_import is not None and hvg_after_normalize is not None:
+        raise ValueError("--hvg-after-import and --hvg-after-normalize are mutually exclusive")
     logger.info("")
-    
+
     # Validate input file
     validate_file_path(input_path, VALID_H5AD_EXTENSIONS)
     
@@ -317,7 +322,31 @@ def process_h5ad(
     
     logger.info("Log-transforming data (log1p)")
     sc.pp.log1p(adata)
-    
+
+    # Post-normalization HVG selection (seurat flavor, operates on log-normalized data)
+    if hvg_after_normalize is not None:
+        logger.info(f"Selecting {hvg_after_normalize} highly variable genes after normalization (seurat flavor)")
+        sc.pp.highly_variable_genes(
+            adata,
+            flavor='seurat',
+            n_top_genes=hvg_after_normalize,
+            subset=False,
+        )
+
+        hvg_scores_path = output_path.with_name(output_path.stem + "_hvg_scores.tsv")
+        score_cols = [c for c in ['highly_variable', 'highly_variable_rank', 'means', 'dispersions', 'dispersions_norm'] if c in adata.var.columns]
+        hvg_df = adata.var[score_cols].copy()
+        hvg_df = hvg_df.sort_values('highly_variable_rank')
+        hvg_df.to_csv(hvg_scores_path, sep='\t')
+        logger.info(f"Wrote full HVG scores ({len(hvg_df)} genes) to {hvg_scores_path}")
+
+        hvg_names_path = output_path.with_name(output_path.stem + "_hvg_names.txt")
+        hvg_names_path.write_text('\n'.join(hvg_df.index) + '\n')
+        logger.info(f"Wrote full HVG gene names to {hvg_names_path}")
+
+        adata = adata[:, adata.var['highly_variable']].copy()
+        logger.info(f"Shape after post-norm HVG selection: {adata.shape}")
+
     # PCA (global if not individual)
     if not individual_pca:
         logger.info(f"Computing PCA ({n_pca_components} components)")
@@ -447,7 +476,13 @@ if __name__ == "__main__":
         "--hvg-after-import",
         type=int,
         default=None,
-        help="If set alongside --import-genes, further select N HVGs within the imported gene subset."
+        help="If set alongside --import-genes, further select N HVGs within the imported gene subset (pre-normalization, seurat_v3 flavor)."
+    )
+    parser.add_argument(
+        "--hvg-after-normalize",
+        type=int,
+        default=None,
+        help="If set alongside --import-genes, further select N HVGs after normalization (seurat flavor). Mutually exclusive with --hvg-after-import."
     )
     parser.add_argument(
         "--log-level",
@@ -474,6 +509,7 @@ if __name__ == "__main__":
             individual_pca=args.individual_pca,
             import_genes=args.import_genes,
             hvg_after_import=args.hvg_after_import,
+            hvg_after_normalize=args.hvg_after_normalize,
         )
     except Exception as e:
         logger.error(f"Pipeline failed: {e}", exc_info=True)

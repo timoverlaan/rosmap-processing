@@ -91,7 +91,8 @@ def main():
     scanpy_parser.add_argument("--k-neighbors", type=int, default=30, help="Number of neighbors for KNN graph (default: 30)")
     scanpy_parser.add_argument("--individual-pca", action="store_true", help="Compute PCA per individual")
     scanpy_parser.add_argument("--import-genes", type=str, default=None, help="Path to gene list file (.txt or .h5ad)")
-    scanpy_parser.add_argument("--hvg-after-import", type=int, default=None, help="If set alongside --import-genes, further select N HVGs within the imported gene subset")
+    scanpy_parser.add_argument("--hvg-after-import", type=int, default=None, help="If set alongside --import-genes, further select N HVGs within the imported gene subset (pre-normalization, seurat_v3 flavor)")
+    scanpy_parser.add_argument("--hvg-after-normalize", type=int, default=None, help="If set alongside --import-genes, further select N HVGs after normalization (seurat flavor). Mutually exclusive with --hvg-after-import.")
     
     # Utils commands
     utils_parser = subparsers.add_parser("utils", help="Utility commands")
@@ -205,6 +206,7 @@ def handle_pipeline_command(args):
             individual_pca=args.individual_pca,
             import_genes=args.import_genes,
             hvg_after_import=args.hvg_after_import,
+            hvg_after_normalize=args.hvg_after_normalize,
         )
 
 
