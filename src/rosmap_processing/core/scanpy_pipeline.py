@@ -53,6 +53,37 @@ def validate_file_path(path: Path, extensions: List[str]) -> None:
         )
 
 
+def detect_hvg_flavor(adata: ad.AnnData, sample_cells: int = 500, sample_genes: int = 200) -> str:
+    """
+    Detect whether X contains raw counts or log-normalized data and return
+    the appropriate HVG flavor for sc.pp.highly_variable_genes.
+
+    Returns 'seurat_v3' for integer count data (stored as floats or ints),
+    or 'seurat' for log-normalized continuous data.
+    """
+    import numpy as np
+    n_cells = min(sample_cells, adata.shape[0])
+    n_genes = min(sample_genes, adata.shape[1])
+    sample = adata.X[:n_cells, :n_genes]
+    if hasattr(sample, 'toarray'):
+        sample = sample.toarray()
+    else:
+        sample = np.array(sample)
+
+    nonzero = sample[sample > 0].flatten()
+    if len(nonzero) == 0:
+        logger.warning("No non-zero values in sample — defaulting to seurat_v3")
+        return 'seurat_v3'
+
+    pct_whole = np.sum(nonzero == np.floor(nonzero)) / len(nonzero)
+    if pct_whole > 0.99:
+        logger.info(f"Data detected as raw counts (%.1f%% whole numbers) — using seurat_v3", pct_whole * 100)
+        return 'seurat_v3'
+    else:
+        logger.info(f"Data detected as log-normalized (%.1f%% whole numbers) — using seurat", pct_whole * 100)
+        return 'seurat'
+
+
 def load_gene_list(gene_file: Path) -> Set[str]:
     """
     Load gene list from file.
@@ -245,9 +276,10 @@ def process_h5ad(
 
         if hvg_after_import is not None:
             logger.info(f"Selecting {hvg_after_import} highly variable genes within imported set")
+            hvg_flavor = detect_hvg_flavor(adata)
             sc.pp.highly_variable_genes(
                 adata,
-                flavor='seurat',
+                flavor=hvg_flavor,
                 n_top_genes=hvg_after_import,
                 subset=False,
             )
@@ -269,9 +301,10 @@ def process_h5ad(
 
     else:
         logger.info(f"Selecting {n_hvgs} highly variable genes")
+        hvg_flavor = detect_hvg_flavor(adata)
         sc.pp.highly_variable_genes(
             adata,
-            flavor='seurat_v3',
+            flavor=hvg_flavor,
             n_top_genes=n_hvgs,
             subset=True
         )
