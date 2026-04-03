@@ -293,7 +293,8 @@ def process_h5ad(
             hvg_scores_path = output_path.with_name(output_path.stem + "_hvg_scores.tsv")
             score_cols = [c for c in ['highly_variable', 'highly_variable_rank', 'dispersions_norm', 'dispersions', 'variances_norm', 'variances'] if c in adata.var.columns]
             hvg_df = adata.var[score_cols].copy()
-            hvg_df = hvg_df.sort_values('highly_variable_rank')
+            sort_col = 'highly_variable_rank' if 'highly_variable_rank' in hvg_df.columns else 'dispersions_norm'
+            hvg_df = hvg_df.sort_values(sort_col, ascending='rank' in sort_col)
             hvg_df.to_csv(hvg_scores_path, sep='\t')
             logger.info(f"Wrote full HVG scores ({len(hvg_df)} genes) to {hvg_scores_path}")
 
@@ -336,7 +337,8 @@ def process_h5ad(
         hvg_scores_path = output_path.with_name(output_path.stem + "_hvg_scores.tsv")
         score_cols = [c for c in ['highly_variable', 'highly_variable_rank', 'means', 'dispersions', 'dispersions_norm'] if c in adata.var.columns]
         hvg_df = adata.var[score_cols].copy()
-        hvg_df = hvg_df.sort_values('highly_variable_rank')
+        sort_col = 'highly_variable_rank' if 'highly_variable_rank' in hvg_df.columns else 'dispersions_norm'
+        hvg_df = hvg_df.sort_values(sort_col, ascending='rank' in sort_col)
         hvg_df.to_csv(hvg_scores_path, sep='\t')
         logger.info(f"Wrote full HVG scores ({len(hvg_df)} genes) to {hvg_scores_path}")
 
