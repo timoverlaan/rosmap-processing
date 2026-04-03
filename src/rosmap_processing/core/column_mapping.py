@@ -265,6 +265,42 @@ def convert_columns(
         )
 
 
+def convert_column_format(
+    input_path: str,
+    data_type: str,
+    output_path: Optional[str] = None,
+    cellclass: Optional[str] = None,
+    subclass: Optional[str] = None
+) -> None:
+    """
+    Load an h5ad file, convert columns, and save the result.
+
+    Args:
+        input_path: Path to input h5ad file
+        data_type: Type of data ('ROSMAP', 'ROSMAP_MIT', or 'SeaAD')
+        output_path: Path to output h5ad file. If None, overwrites input file (inplace).
+        cellclass: Cell class for ROSMAP_MIT data
+        subclass: Cell subclass for ROSMAP_MIT data
+    """
+    input_p = Path(input_path)
+    logger.info(f"Loading data from {input_p}...")
+    adata = ad.read_h5ad(input_p)
+    logger.info(f"Loaded AnnData: {adata.shape[0]} cells × {adata.shape[1]} genes")
+
+    adata = convert_columns(
+        adata,
+        data_type=data_type,
+        cellclass=cellclass,
+        subclass=subclass
+    )
+
+    out_p = Path(output_path) if output_path else input_p
+    logger.info(f"Saving converted data to {out_p}...")
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+    adata.write_h5ad(out_p, compression="gzip")
+    logger.info("Column format conversion complete.")
+
+
 def main():
     """Command-line interface for column conversion."""
     import argparse
