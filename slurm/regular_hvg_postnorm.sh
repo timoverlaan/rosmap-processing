@@ -15,6 +15,8 @@
 # post-normalization with seurat (v1) flavor, for 1k / 2k / 3k HVGs.
 # Compare with regular_hvg.sh which does the same but pre-normalization (seurat_v3).
 # Used as a baseline comparison against the scAGG paper dataset.
+# Step 1: ROSMAP_MIT — normalize, then select HVGs within the full gene set
+# Step 2: SeaAD    — uses the ROSMAP_MIT output as gene reference (exact same HVGs)
 
 for N in 1000 2000 3000; do
     echo ""
@@ -29,5 +31,20 @@ for N in 1000 2000 3000; do
             data/raw/ROSMAP_MIT/combined.h5ad \
             data/processed/rosmap_mit_hvg${N}_postnorm_k30.h5ad \
             --hvg-after-normalize ${N} \
+            --k-neighbors 30
+
+    echo ""
+    echo "========================================"
+    echo "SeaAD — ${N} HVGs (post-norm, from ROSMAP_MIT)"
+    echo "========================================"
+    apptainer exec --writable-tmpfs --pwd /opt/app --containall \
+        --bind src/:/opt/app/src/ \
+        --bind data/:/opt/app/data/ \
+        --env PYTHONPATH=/opt/app/src \
+        ./container_pixi_0-1-3.sif pixi run python -m rosmap_processing pipeline scanpy \
+            data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad \
+            data/seaAD/PFC/RNAseq/seaad_hvg${N}_postnorm_k30.h5ad \
+            --layer UMIs \
+            --import-genes data/processed/rosmap_mit_hvg${N}_postnorm_k30.h5ad \
             --k-neighbors 30
 done
