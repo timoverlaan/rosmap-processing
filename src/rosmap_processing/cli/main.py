@@ -93,7 +93,34 @@ def main():
     scanpy_parser.add_argument("--import-genes", type=str, default=None, help="Path to gene list file (.txt or .h5ad)")
     scanpy_parser.add_argument("--hvg-after-import", type=int, default=None, help="If set alongside --import-genes, further select N HVGs within the imported gene subset (pre-normalization, seurat_v3 flavor)")
     scanpy_parser.add_argument("--hvg-after-normalize", type=int, default=None, help="If set alongside --import-genes, further select N HVGs after normalization (seurat flavor). Mutually exclusive with --hvg-after-import.")
-    
+
+    # pipeline mathys2023-for-adprs
+    adprs_parser = pipeline_subparsers.add_parser(
+        "mathys2023-for-adprs",
+        help="Aggregate Mathys 2023 per-class h5ads into per-(donor, cell_type, gene) stats for ad-prs",
+    )
+    adprs_parser.add_argument(
+        "--input-dir", type=Path, default=Path("data/raw/ROSMAP_MIT"),
+        help="Directory containing per-class h5ad files (default: data/raw/ROSMAP_MIT)",
+    )
+    adprs_parser.add_argument(
+        "--output-dir", type=Path, default=Path("data/processed/mathys2023_for_adprs"),
+        help="Directory to write outputs into (default: data/processed/mathys2023_for_adprs)",
+    )
+    adprs_parser.add_argument(
+        "--clinical-csv", type=Path, default=Path("data/raw/ROSMAP/rosmap_clinical.csv"),
+        help="ROSMAP clinical CSV (default: data/raw/ROSMAP/rosmap_clinical.csv)",
+    )
+    adprs_parser.add_argument(
+        "--mit-metadata-csv", type=Path,
+        default=Path("data/raw/ROSMAP_MIT/MIT_ROSMAP_Multiomics_individual_metadata.csv"),
+        help="MIT individual metadata CSV (for individualID -> subject mapping)",
+    )
+    adprs_parser.add_argument(
+        "--keep-intermediate", action="store_true",
+        help="Keep per-class parquet chunks under _intermediate/ after merging",
+    )
+
     # Utils commands
     utils_parser = subparsers.add_parser("utils", help="Utility commands")
     utils_subparsers = utils_parser.add_subparsers(dest="utils_command", required=True)
@@ -207,6 +234,17 @@ def handle_pipeline_command(args):
             import_genes=args.import_genes,
             hvg_after_import=args.hvg_after_import,
             hvg_after_normalize=args.hvg_after_normalize,
+        )
+
+    elif args.pipeline_command == "mathys2023-for-adprs":
+        from rosmap_processing.pipelines.mathys2023_for_adprs import run_pipeline
+        logger.info(f"Running Mathys 2023 ad-prs aggregation; input={args.input_dir}")
+        run_pipeline(
+            input_dir=args.input_dir,
+            output_dir=args.output_dir,
+            clinical_csv=args.clinical_csv,
+            mit_metadata_csv=args.mit_metadata_csv,
+            keep_intermediate=args.keep_intermediate,
         )
 
 
