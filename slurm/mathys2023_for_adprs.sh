@@ -26,7 +26,7 @@ apptainer exec --writable-tmpfs --pwd /opt/app --containall \
     --bind src/:/opt/app/src/ \
     --bind data/:/opt/app/data/ \
     --env PYTHONPATH=/opt/app/src \
-    ./container_pixi_0-1-3.sif pixi run python -m rosmap_processing pipeline mathys2023-for-adprs \
+    ./container_pixi_0-2-1.sif pixi run python -m rosmap_processing pipeline mathys2023-for-adprs \
         --input-dir data/raw/ROSMAP_MIT \
         --output-dir data/processed/mathys2023_for_adprs \
         --clinical-csv data/raw/ROSMAP/rosmap_clinical.csv \
