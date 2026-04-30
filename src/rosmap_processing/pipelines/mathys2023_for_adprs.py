@@ -280,8 +280,76 @@ def process_class_file(
     return major_path, subtype_path, cell_counts
 
 
+def consolidate_chunks(chunk_paths: List[Path], output_path: Path) -> None:
+    """Concat chunks and merge duplicate (donor, granularity, cell_type, gene) rows.
+
+    When multiple per-class h5ads map to the same major label (e.g. the three
+    Excitatory_neurons_set{1,2,3} files -> 'Ex'), and a donor has cells in more
+    than one of them, naive concatenation would emit one row per source file
+    for the same key tuple. This function merges them via n_cells-weighted
+    means for `mean_expr` and `frac_expressed` and a sum for `n_cells`:
+
+        n_cells'        := Sigma n_i
+        mean_expr'      := Sigma (n_i * mean_i) / Sigma n_i
+        frac_expressed' := Sigma (n_i * frac_i) / Sigma n_i
+
+    For a single-chunk input this is equivalent to a passthrough, so it's safe
+    to always call.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not chunk_paths:
+        raise ValueError("No chunks to consolidate")
+    if len(chunk_paths) == 1:
+        # Cheap copy preserves dtypes/categoricals exactly; avoids re-encoding.
+        import shutil
+
+        shutil.copyfile(chunk_paths[0], output_path)
+        return
+
+    dfs = [pd.read_parquet(p) for p in chunk_paths]
+    df = pd.concat(dfs, ignore_index=True)
+
+    # groupby on category dtype with non-overlapping categories across chunks
+    # mishandles values; cast key columns to str for the groupby.
+    key_cols = ["donor_id", "granularity", "cell_type", "gene_symbol"]
+    for col in key_cols:
+        df[col] = df[col].astype(str)
+
+    n = df["n_cells"].astype(np.int64).values
+    df["_mean_x_n"] = df["mean_expr"].astype(np.float64).values * n
+    df["_frac_x_n"] = df["frac_expressed"].astype(np.float64).values * n
+    df["_n"] = n
+
+    agg = df.groupby(key_cols, as_index=False, sort=False).agg(
+        _n=("_n", "sum"),
+        _mean_x_n=("_mean_x_n", "sum"),
+        _frac_x_n=("_frac_x_n", "sum"),
+    )
+    agg["mean_expr"] = (agg["_mean_x_n"] / agg["_n"]).astype(np.float32)
+    agg["frac_expressed"] = (agg["_frac_x_n"] / agg["_n"]).astype(np.float32)
+    agg["n_cells"] = agg["_n"].astype(np.int32)
+    agg = agg[
+        ["donor_id", "granularity", "cell_type", "gene_symbol",
+         "mean_expr", "frac_expressed", "n_cells"]
+    ]
+    agg["donor_id"] = agg["donor_id"].astype(str)
+    agg["granularity"] = agg["granularity"].astype("category")
+    agg["cell_type"] = agg["cell_type"].astype("category")
+    agg["gene_symbol"] = agg["gene_symbol"].astype("category")
+    agg.to_parquet(output_path, compression="zstd", index=False)
+    logger.info(
+        f"  consolidated {len(chunk_paths)} chunks -> {output_path.name} "
+        f"({len(df)} input rows -> {len(agg)} unique-key rows)"
+    )
+
+
 def merge_chunks(chunk_paths: List[Path], output_path: Path) -> None:
-    """Concatenate intermediate parquet chunks into a single file."""
+    """Concatenate intermediate parquet chunks into a single file.
+
+    Assumes the chunks have disjoint (donor, granularity, cell_type, gene_symbol)
+    keys — call `consolidate_chunks` first on any group of chunks that share a
+    major label.
+    """
     import pyarrow.parquet as pq
 
     if not chunk_paths:
@@ -440,7 +508,7 @@ Empty buckets are not emitted. To get per-major counts including zeros, use
 Major labels follow Yang 2023's 6-class scheme:
 
 - Astrocytes -> Ast
-- Excitatory_neurons_set{{1,2,3}} -> Ex (three input files merged into one major bucket)
+- Excitatory_neurons_set{{1,2,3}} -> Ex (three input files merged into one major bucket; see "Consolidation across source files" below)
 - Inhibitory_neurons -> In
 - Immune_cells -> Mic — **note**: Mathys 2023 grouped microglia + macrophages + T cells into one "Immune" compartment. We pass through the *full* Immune compartment as Mic. If you need microglia-only, filter on the subtype-level rows where `cell_type` starts with `Mic.`.
 - Oligodendrocytes -> Oli
@@ -449,6 +517,24 @@ Major labels follow Yang 2023's 6-class scheme:
 Subtype labels are the verbatim `cell_type_high_resolution` strings from the
 atlas (e.g. `Ast.2`, `Mic.1`, `Exc.RELN-LAMP5`, etc.). No subtype -> major
 remap is encoded in this output beyond the file partition.
+
+## Consolidation across source files
+
+When the same donor has cells in multiple source files that map to the same
+major label (e.g. `Excitatory_neurons_set1` + `_set2` both -> `Ex`), the
+per-file aggregates are combined via `n_cells`-weighted means before being
+emitted to the parquet. Concretely, for a given (donor, granularity,
+cell_type, gene_symbol) tuple:
+
+```
+n_cells'        = sum(n_i)
+mean_expr'      = sum(n_i * mean_i) / sum(n_i)
+frac_expressed' = sum(n_i * frac_i) / sum(n_i)
+```
+
+So `n_cells` in the parquet is the *total* cell count across source files for
+that key tuple. To recompute pooled-across-donor stats downstream, use the
+same `Sigma(n_i * x_i) / Sigma(n_i)` form on the per-donor rows.
 
 ## Gene IDs
 
@@ -505,15 +591,20 @@ def run_pipeline(
     files = _resolve_input_files(input_dir, file_to_major)
     logger.info(f"Will process {len(files)} per-class h5ad(s)")
 
-    major_chunks: List[Path] = []
-    subtype_chunks: List[Path] = []
+    # Group raw chunks by major label so we can n-weighted-merge any
+    # (donor, cell_type, gene) duplicates that span multiple source files
+    # (notably the three Excitatory_neurons_set{1,2,3} -> 'Ex' files).
+    chunks_by_major: Dict[str, Dict[str, List[Path]]] = {}
     cell_counts: List[pd.DataFrame] = []
 
+    all_raw_chunks: List[Path] = []
     n_genes_seen: Optional[int] = None
     for path, major in tqdm(files.items(), desc="Per-class aggregation"):
         major_path, subtype_path, cc = process_class_file(path, major, output_dir)
-        major_chunks.append(major_path)
-        subtype_chunks.append(subtype_path)
+        slot = chunks_by_major.setdefault(major, {"major": [], "subtype": []})
+        slot["major"].append(major_path)
+        slot["subtype"].append(subtype_path)
+        all_raw_chunks.extend([major_path, subtype_path])
         cell_counts.append(cc)
 
         n_genes_chunk = pd.read_parquet(major_path, columns=["gene_symbol"])[
@@ -529,8 +620,16 @@ def run_pipeline(
                 f"the two granularities. Verify input."
             )
 
+    consolidated_chunks: List[Path] = []
+    consolidation_dir = output_dir / INTERMEDIATE_DIR
+    for major, by_gran in chunks_by_major.items():
+        for gran, paths in by_gran.items():
+            consolidated_path = consolidation_dir / f"_consolidated_{major}_{gran}.parquet"
+            consolidate_chunks(paths, consolidated_path)
+            consolidated_chunks.append(consolidated_path)
+
     out_parquet = output_dir / OUTPUT_PARQUET_NAME
-    merge_chunks(major_chunks + subtype_chunks, out_parquet)
+    merge_chunks(consolidated_chunks, out_parquet)
 
     donor_meta = build_donor_metadata(cell_counts, clinical_csv, mit_metadata_csv)
     out_meta = output_dir / DONOR_METADATA_NAME
@@ -549,7 +648,7 @@ def run_pipeline(
 
     if not keep_intermediate:
         intermediate = output_dir / INTERMEDIATE_DIR
-        for p in major_chunks + subtype_chunks:
+        for p in all_raw_chunks + consolidated_chunks:
             p.unlink(missing_ok=True)
         if intermediate.exists() and not any(intermediate.iterdir()):
             intermediate.rmdir()
