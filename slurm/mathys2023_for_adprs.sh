@@ -29,5 +29,5 @@ apptainer exec --writable-tmpfs --pwd /opt/app --containall \
     ./container_pixi_0-2-1.sif pixi run python -m rosmap_processing pipeline mathys2023-for-adprs \
         --input-dir data/raw/ROSMAP_MIT \
         --output-dir data/processed/mathys2023_for_adprs \
-        --clinical-csv data/raw/ROSMAP/rosmap_clinical.csv \
+        --clinical-csv data/raw/ROSMAP/ROSMAP_clinical.csv \
         --mit-metadata-csv data/raw/ROSMAP_MIT/MIT_ROSMAP_Multiomics_individual_metadata.csv

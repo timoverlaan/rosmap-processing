@@ -108,8 +108,8 @@ def main():
         help="Directory to write outputs into (default: data/processed/mathys2023_for_adprs)",
     )
     adprs_parser.add_argument(
-        "--clinical-csv", type=Path, default=Path("data/raw/ROSMAP/rosmap_clinical.csv"),
-        help="ROSMAP clinical CSV (default: data/raw/ROSMAP/rosmap_clinical.csv)",
+        "--clinical-csv", type=Path, default=Path("data/raw/ROSMAP/ROSMAP_clinical.csv"),
+        help="ROSMAP clinical CSV (default: data/raw/ROSMAP/ROSMAP_clinical.csv)",
     )
     adprs_parser.add_argument(
         "--mit-metadata-csv", type=Path,
@@ -119,6 +119,10 @@ def main():
     adprs_parser.add_argument(
         "--keep-intermediate", action="store_true",
         help="Keep per-class parquet chunks under _intermediate/ after merging",
+    )
+    adprs_parser.add_argument(
+        "--resume", action="store_true",
+        help="If the per-donor parquet already exists, skip aggregation and only rebuild donor_metadata.tsv + README.md from it",
     )
 
     # Utils commands
@@ -245,6 +249,7 @@ def handle_pipeline_command(args):
             clinical_csv=args.clinical_csv,
             mit_metadata_csv=args.mit_metadata_csv,
             keep_intermediate=args.keep_intermediate,
+            resume=args.resume,
         )
 
 

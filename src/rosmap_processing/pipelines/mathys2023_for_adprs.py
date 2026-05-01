@@ -563,6 +563,41 @@ was deferred. Apply downstream using a Mathys 2019 donor list.
     logger.info(f"Wrote {output_dir / README_NAME}")
 
 
+def _donor_counts_from_parquet(
+    parquet_path: Path, file_to_major: Dict[str, str]
+) -> List[pd.DataFrame]:
+    """Reconstruct the per-class cell-count DataFrames from an existing merged
+    parquet (used by --resume mode after the heavy aggregation already ran).
+
+    `n_cells` is constant across genes for a given (donor, granularity, cell_type),
+    so we drop_duplicates on those keys at major granularity. We emit one
+    `{donor_id, n_cells_<MAJOR>}` DataFrame per *unique* major label so that
+    `build_donor_metadata` reduces correctly. (The original per-class shape
+    isn't needed downstream — only the per-major sum is.)
+    """
+    cols = ["donor_id", "granularity", "cell_type", "n_cells"]
+    df = pd.read_parquet(parquet_path, columns=cols)
+    df = df[df["granularity"].astype(str) == "major"].copy()
+    df["donor_id"] = df["donor_id"].astype(str)
+    df["cell_type"] = df["cell_type"].astype(str)
+    df = df.drop_duplicates(subset=["donor_id", "cell_type"])
+
+    out: List[pd.DataFrame] = []
+    for major in sorted(set(file_to_major.values())):
+        sub = df[df["cell_type"] == major]
+        if sub.empty:
+            continue
+        out.append(
+            pd.DataFrame(
+                {
+                    "donor_id": sub["donor_id"].values,
+                    f"n_cells_{major}": sub["n_cells"].astype(np.int64).values,
+                }
+            )
+        )
+    return out
+
+
 def run_pipeline(
     input_dir: Path,
     output_dir: Path,
@@ -570,8 +605,16 @@ def run_pipeline(
     mit_metadata_csv: Optional[Path] = None,
     file_to_major: Optional[Dict[str, str]] = None,
     keep_intermediate: bool = False,
+    resume: bool = False,
 ) -> None:
-    """End-to-end aggregation: per-class h5ads -> long parquet + donor metadata + README."""
+    """End-to-end aggregation: per-class h5ads -> long parquet + donor metadata + README.
+
+    If `resume=True` and the output parquet already exists, the per-class
+    aggregation is skipped and `n_cells` is read back from the parquet to
+    rebuild the donor-metadata + README only. Useful for recovering from
+    failures in the post-aggregation steps (e.g. a wrong clinical CSV path)
+    without redoing the multi-hour aggregation pass.
+    """
     file_to_major = file_to_major or FILE_TO_MAJOR
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -585,8 +628,50 @@ def run_pipeline(
     logger.info(f"Output dir: {output_dir}")
     logger.info(f"Clinical CSV: {clinical_csv}")
     logger.info(f"MIT metadata CSV: {mit_metadata_csv}")
+    logger.info(f"Resume mode: {resume}")
+
+    # Validate clinical CSV path up front — failing here is much cheaper than
+    # failing after the multi-hour aggregation pass.
+    if not clinical_csv.exists():
+        raise FileNotFoundError(
+            f"Clinical CSV not found: {clinical_csv}. Pass --clinical-csv or "
+            f"check the case (the cluster file system is case-sensitive; "
+            f"the canonical name is 'ROSMAP_clinical.csv')."
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    out_parquet_for_resume = output_dir / OUTPUT_PARQUET_NAME
+
+    if resume and out_parquet_for_resume.exists():
+        logger.info(
+            f"--resume: parquet already exists at {out_parquet_for_resume}; "
+            f"skipping per-class aggregation and rebuilding metadata + README only."
+        )
+        cell_counts = _donor_counts_from_parquet(out_parquet_for_resume, file_to_major)
+        # Synthesise a "files processed" dict from the parquet's actual majors.
+        files = {
+            input_dir / f"{stem}.h5ad": major
+            for stem, major in file_to_major.items()
+            if any(major in df.columns[1] for df in cell_counts)
+        }
+        n_genes_seen = pd.read_parquet(
+            out_parquet_for_resume, columns=["gene_symbol"]
+        )["gene_symbol"].nunique()
+        donor_meta = build_donor_metadata(cell_counts, clinical_csv, mit_metadata_csv)
+        out_meta = output_dir / DONOR_METADATA_NAME
+        donor_meta.to_csv(out_meta, sep="\t", index=False)
+        logger.info(f"Wrote {out_meta} ({len(donor_meta)} donors)")
+        write_readme(
+            output_dir=output_dir,
+            files_processed=files,
+            n_donors=len(donor_meta),
+            n_genes=int(n_genes_seen),
+            total_cells=int(donor_meta["total_cells"].sum()),
+        )
+        logger.info("=" * 60)
+        logger.info("Done (resume).")
+        logger.info("=" * 60)
+        return
 
     files = _resolve_input_files(input_dir, file_to_major)
     logger.info(f"Will process {len(files)} per-class h5ad(s)")
@@ -693,8 +778,8 @@ def main() -> None:
     parser.add_argument(
         "--clinical-csv",
         type=Path,
-        default=Path("data/raw/ROSMAP/rosmap_clinical.csv"),
-        help="ROSMAP clinical CSV (default: data/raw/ROSMAP/rosmap_clinical.csv)",
+        default=Path("data/raw/ROSMAP/ROSMAP_clinical.csv"),
+        help="ROSMAP clinical CSV (default: data/raw/ROSMAP/ROSMAP_clinical.csv)",
     )
     parser.add_argument(
         "--mit-metadata-csv",
@@ -706,6 +791,15 @@ def main() -> None:
         "--keep-intermediate",
         action="store_true",
         help="Keep per-class parquet chunks under _intermediate/ after merging",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "If the per-donor parquet already exists in --output-dir, skip the "
+            "(expensive) aggregation step and only rebuild donor_metadata.tsv + "
+            "README.md from it. Counts are read back from the parquet."
+        ),
     )
     parser.add_argument(
         "--log-level",
@@ -722,6 +816,7 @@ def main() -> None:
         clinical_csv=args.clinical_csv,
         mit_metadata_csv=args.mit_metadata_csv,
         keep_intermediate=args.keep_intermediate,
+        resume=args.resume,
     )
 
 
