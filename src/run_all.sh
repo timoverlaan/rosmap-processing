@@ -9,8 +9,8 @@
 #                              .h5Seurat files made from the RDS are written here too
 #                              (set MIT_RAW to use another directory)
 # Outputs in data/v2/:
-#   data/v2/converted/<DATASET>/<class>.h5ad  SeuratDisk output (X = Seurat 'data', raw = counts)
 #   data/v2/counts/<DATASET>/<class>.h5ad     raw counts in X (int32), clinical metadata in obs
+#                                             (RNA counts read from the .h5Seurat in Python)
 #   data/v2/counts/<DATASET>/combined.h5ad    all classes of a dataset
 # Steps skip outputs that already exist, so a failed run can be resubmitted.
 
@@ -34,42 +34,34 @@ RUN_INFO=$(pixi run python src/setup_run.py --config config.yaml --run-name rosm
 eval "$RUN_INFO"
 echo "Run directory: ${OUTPUT_DIR}"
 
-echo "[Step 1/5] Downloading / verifying pinned Synapse files..."
+echo "[Step 1/4] Downloading / verifying pinned Synapse files..."
 # Green objects + ROSMAP metadata into $GREEN (present files are MD5-checked, not re-downloaded)
 rp data download --dataset rosmap --output-dir $V2/download
 # Mathys 2023 files: checked in place; fails with a list of mismatches if any differ
 rp data verify --dataset rosmap-mit --dir "$MIT"
 
-echo "[Step 2/5] Converting ROSMAP-MIT RDS files to h5Seurat (skips existing)..."
+echo "[Step 2/4] Converting ROSMAP-MIT RDS files to h5Seurat (skips existing)..."
+# The April 2026 .h5Seurat files exist, so this normally does nothing. SeuratDisk
+# may fail with the container's SeuratObject (`GetAssayData(slot = )` is defunct).
 RDS=""
 for c in $MIT_CLASSES; do RDS="$RDS $MIT/$c.rds"; done
 # shellcheck disable=SC2086
 pixi run Rscript src/convert_R/rds_to_h5Seurat.R $RDS
 
-echo "[Step 3/5] Converting h5Seurat files to h5ad (into $V2/converted)..."
-H5S=""
-for c in $MIT_CLASSES; do H5S="$H5S $MIT/$c.h5Seurat"; done
-# shellcheck disable=SC2086
-pixi run Rscript src/convert_R/h5Seurat_to_h5ad.R --outdir=$V2/converted/ROSMAP_MIT $H5S
-H5S=""
-for c in $ROSMAP_CLASSES; do H5S="$H5S $GREEN/$c.h5Seurat"; done
-# shellcheck disable=SC2086
-pixi run Rscript src/convert_R/h5Seurat_to_h5ad.R --outdir=$V2/converted/ROSMAP $H5S
-
-echo "[Step 4/5] Raw counts into X, checked over the whole matrix, plus clinical metadata..."
+echo "[Step 3/4] RNA counts from the .h5Seurat into X, checked over the whole matrix, plus clinical metadata..."
 for c in $MIT_CLASSES; do
     out=$V2/counts/ROSMAP_MIT/$c.h5ad
     if [ -e "$out" ]; then echo "exists, skipping: $out"; continue; fi
-    rp data prepare $V2/converted/ROSMAP_MIT/$c.h5ad --output "$out" \
+    rp data prepare $MIT/$c.h5Seurat --output "$out" \
         --columns cell_type_high_resolution --metadata $CLINICAL
 done
 for c in $ROSMAP_CLASSES; do
     out=$V2/counts/ROSMAP/$c.h5ad
     if [ -e "$out" ]; then echo "exists, skipping: $out"; continue; fi
-    rp data prepare "$V2/converted/ROSMAP/$c.h5ad" --output "$out" --columns --metadata $CLINICAL
+    rp data prepare "$GREEN/$c.h5Seurat" --output "$out" --columns --metadata $CLINICAL
 done
 
-echo "[Step 5/5] Combining per-class files..."
+echo "[Step 4/4] Combining per-class files..."
 for ds in ROSMAP_MIT ROSMAP; do
     if [ "$ds" = ROSMAP_MIT ]; then classes=$MIT_CLASSES; else classes=$ROSMAP_CLASSES; fi
     out=$V2/counts/$ds/combined.h5ad

@@ -30,10 +30,12 @@ missing or mismatched file. Needs no Synapse login.
 
 ### `data prepare`
 ```bash
-python -m rosmap_processing data prepare <converted.h5ad> --output <counts.h5ad> \
+python -m rosmap_processing data prepare <input.h5Seurat|converted.h5ad> --output <counts.h5ad> \
     [--columns cell_type_high_resolution ...] [--metadata data/v2/download/ROSMAP/ROSMAP_clinical.csv]
 ```
-Takes a SeuratDisk-converted h5ad (X = Seurat `data` slot, `.raw` = counts),
+Takes an `.h5Seurat` file (the RNA `counts` slot and `meta.data` are read
+directly, R factors become categoricals) or a SeuratDisk-converted h5ad
+(X = Seurat `data` slot, `.raw` = counts),
 puts the counts in X as int32, checks that every stored value is a
 non-negative integer (fails otherwise), makes the given obs columns
 categorical, and merges clinical metadata on `projid` (or `individualID`).

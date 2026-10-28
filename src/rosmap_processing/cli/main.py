@@ -69,9 +69,11 @@ def main():
     # data prepare
     prepare_parser = data_subparsers.add_parser(
         "prepare",
-        help="Converted h5ad -> new h5ad with verified raw counts in X (+ clinical metadata)",
+        help=".h5Seurat (or converted h5ad) -> new h5ad with verified raw counts in X (+ clinical metadata)",
     )
-    prepare_parser.add_argument("input", type=str, help="SeuratDisk-converted h5ad (X = Seurat data, raw = counts)")
+    prepare_parser.add_argument("input", type=str,
+                                help=".h5Seurat (RNA counts are read directly) or SeuratDisk-converted h5ad "
+                                     "(X = Seurat data, raw = counts)")
     prepare_parser.add_argument("--output", type=str, required=True, help="Output h5ad (must differ from input)")
     prepare_parser.add_argument("--columns", type=str, nargs="*", default=["cell_type_high_resolution"],
                                 help="obs columns to make categorical (default: cell_type_high_resolution)")

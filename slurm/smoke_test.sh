@@ -21,6 +21,7 @@ in_container pixi run Rscript -e 'suppressMessages(library(SeuratDisk)); cat("Se
 in_container pixi run python -m pytest -q -p no:cacheprovider -rs \
     tests/test_utils_counts.py \
     tests/test_data_prepare.py \
+    tests/test_data_h5seurat.py \
     tests/test_data_genes.py \
     tests/test_data_download.py \
     tests/test_core_scanpy_pipeline.py \

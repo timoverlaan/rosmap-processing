@@ -1,12 +1,13 @@
-"""Turn a SeuratDisk-converted h5ad into a raw-count h5ad.
+"""Turn an .h5Seurat file (or a SeuratDisk-converted h5ad) into a raw-count h5ad.
 
-SeuratDisk's `Convert()` writes Seurat's `data` slot to X and the `counts` slot
-to `.raw`. Whether `data` holds counts or log-normalized values depends on how
-the authors saved each object: in the Mathys 2023 files, Immune_cells,
-Inhibitory_neurons and OPCs are log-normalized; in the Green 2024 files, cux2+
-and inhibitory are. This step always takes the counts (`.raw` when present),
-checks the whole matrix is integer counts, adds clinical metadata, and writes a
-new file. It never modifies its input.
+An .h5Seurat is read directly: its RNA `counts` slot becomes X (see h5seurat.py).
+SeuratDisk's `Convert()` instead writes Seurat's `data` slot to X and the
+`counts` slot to `.raw`. Whether `data` holds counts or log-normalized values
+depends on how the authors saved each object: in the Mathys 2023 files,
+Immune_cells, Inhibitory_neurons and OPCs are log-normalized; in the Green 2024
+files, cux2+ and inhibitory are. This step always takes the counts (`.raw` when
+present), checks the whole matrix is integer counts, adds clinical metadata,
+and writes a new file. It never modifies its input.
 """
 
 from pathlib import Path
@@ -19,6 +20,7 @@ from ..utils.counts import assert_integer_counts, to_int32_counts
 from ..utils.logging import get_logger
 from ..utils.provenance import provenance_record
 from .category_fix import fix_categories
+from .h5seurat import read_h5seurat
 from .metadata import add_metadata
 
 logger = get_logger(__name__)
@@ -83,7 +85,7 @@ def prepare_file(
     metadata_path: Optional[Path] = None,
     overwrite: bool = False,
 ) -> None:
-    """Read a converted h5ad, prepare counts + metadata, write to a new file."""
+    """Read an .h5Seurat or converted h5ad, prepare counts + metadata, write to a new file."""
     input_path = Path(input_path)
     output_path = Path(output_path)
     if not input_path.exists():
@@ -94,7 +96,10 @@ def prepare_file(
         raise FileExistsError(f"Output exists: {output_path} (pass --overwrite to replace it)")
 
     logger.info(f"Loading {input_path}")
-    adata = ad.read_h5ad(input_path)
+    if input_path.suffix.lower() == ".h5seurat":
+        adata = read_h5seurat(input_path)
+    else:
+        adata = ad.read_h5ad(input_path)
     logger.info(f"Loaded: {adata.n_obs} cells x {adata.n_vars} genes, raw present: {adata.raw is not None}")
 
     metadata = pd.read_csv(metadata_path) if metadata_path else None

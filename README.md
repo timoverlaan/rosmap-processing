@@ -22,6 +22,14 @@ In the Green 2024 objects each cell class keeps only genes detected in at least
 so combining the classes fills those genes with zeros, which is a close
 approximation.
 
+`data prepare` reads the RNA `counts` slot and `meta.data` of each `.h5Seurat`
+file in Python (`data/h5seurat.py`). SeuratDisk is not used for this: with the
+container's SeuratObject its `LoadH5Seurat` fails (`GetAssayData(slot = )` is
+defunct), and its h5ad conversion puts Seurat's `data` slot in X and loses
+factor labels. The ROSMAP-MIT `.h5Seurat` files were made from the RDS files
+with SeuratDisk in April 2026 (`rds_to_h5Seurat.R`, which only runs for missing
+files).
+
 Every Synapse file is pinned to a version and MD5 in `SYNAPSE_FILES`
 (`utils/constants.py`); `data download` and `data verify` check them. All of
 these entities got a new version in July 2026 (2026-07-08/09/14), but each new
@@ -34,8 +42,8 @@ data/raw/ROSMAP_MIT/          Mathys 2023 RDS + metadata (MD5-verified in place)
 data/raw/ROSMAP/              old Green copies, NOT used (rewritten in 2025, see "Data history")
 data/v2/download/ROSMAP/      Green 2024 objects + ROSMAP metadata, fresh pinned downloads
 data/reference/               Ensembl 93 and GENCODE v32 GTFs
-data/v2/converted/<DATASET>/  SeuratDisk output (X = Seurat 'data' slot, raw = counts)
 data/v2/counts/<DATASET>/     raw counts in X (int32) + clinical metadata, per class and combined.h5ad
+                              (RNA counts read straight from the .h5Seurat files, see below)
 data/v2/counts/SeaAD/         SeaAD with ROSMAP-style columns (counts in layer 'UMIs')
 data/v2/reference/            gene maps (symbol -> Ensembl ID), shared_gene_ids.txt (MIT+SeaAD), shared_gene_ids_3way.txt (+Green)
 data/v2/processed/            processed datasets (below), mathys2023_for_adprs/
