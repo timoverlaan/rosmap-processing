@@ -68,8 +68,10 @@ def test_reads_counts_and_metadata(tmp_path):
     assert cell_type.isna().iloc[0]
     assert list(cell_type.iloc[1:3]) == ["Mic", "Ast"]
 
-    assert np.isnan(adata.obs["projid"].iloc[-1])
-    assert adata.obs["projid"].iloc[0] == 101
+    projid = adata.obs["projid"]
+    assert projid.isna().iloc[-1]
+    assert projid.iloc[0] == 101
+    assert projid.astype(str).iloc[0] == "101"
     assert adata.obs["batch"].iloc[0] == "b1"
 
 

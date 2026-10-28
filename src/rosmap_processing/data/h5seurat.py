@@ -46,7 +46,8 @@ def _read_column(node, name: str):
         return _strings(node)
     values = node[()]
     if values.dtype.kind == "i" and (values == R_NA_INTEGER).any():
-        values = np.where(values == R_NA_INTEGER, np.nan, values)
+        # nullable integers, so a join on e.g. projid as text still sees "12345"
+        return pd.arrays.IntegerArray(values.astype(np.int64), values == R_NA_INTEGER)
     return values
 
 
