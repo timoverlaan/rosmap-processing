@@ -83,6 +83,19 @@ def test_build_gene_map_by_name_reports_unmatched():
     assert gm.loc[2, "method"] == "unmatched"
 
 
+def test_build_gene_map_reads_embedded_ensembl_ids():
+    # SeaAD style: the plain symbol is the first copy, later copies carry their ID
+    ref = pd.DataFrame({"gene_id": ["E1", "E2", "ENSG03"], "gene_name": ["A", "B", "A"]})
+    gm = build_gene_map(["B", "A", "A ENSG03", "C ENSG99"], ref)
+    assert gm["gene_id"].tolist() == ["E2", "E1", "ENSG03", None]
+    assert gm["method"].tolist() == ["name", "name", "embedded_id", "unmatched"]
+
+    # if the plain symbol were the same gene, both are flagged instead of guessed
+    ref = pd.DataFrame({"gene_id": ["ENSG01", "E2"], "gene_name": ["A", "A"]})
+    gm = build_gene_map(["A", "A ENSG01"], ref)
+    assert gm["method"].tolist() == ["ambiguous", "ambiguous"]
+
+
 def test_shared_gene_ids(tmp_path):
     a = tmp_path / "a.tsv"
     b = tmp_path / "b.tsv"

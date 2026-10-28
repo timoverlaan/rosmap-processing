@@ -54,6 +54,8 @@ RECIPES: Dict[str, Dict] = {
 
 _ATTR_RE = re.compile(r'(\S+) "([^"]*)"')
 _VERSION_RE = re.compile(r"^(ENS[GTE]\d+)\.\d+")
+# SeaAD names the later copies of a duplicated symbol "<symbol> <Ensembl ID>"
+_EMBEDDED_ID_RE = re.compile(r"^\S+ (ENSG\d+)$")
 _EXCLUDED_TAGS = {"readthrough_transcript", "PAR"}
 
 
@@ -159,8 +161,9 @@ def build_gene_map(var_names: Sequence[str], reference: pd.DataFrame) -> pd.Data
     """Map each dataset gene to an Ensembl ID using a rebuilt reference list.
 
     Returns a DataFrame with columns var_name, gene_id (None if unmatched),
-    ref_name and method ('position', 'name', 'unique_symbol' or 'unmatched'),
-    in dataset order.
+    ref_name and method ('position', 'name', 'embedded_id', 'unique_symbol' or
+    'unmatched'), in dataset order. 'embedded_id' is a name like
+    "TBCE ENSG00000284770" whose Ensembl ID is in the reference.
     """
     var_names = [str(v) for v in var_names]
     ref_ids = reference["gene_id"].tolist()
@@ -188,11 +191,17 @@ def build_gene_map(var_names: Sequence[str], reference: pd.DataFrame) -> pd.Data
         if name_counts[name] == 1
     }
 
+    name_by_id = dict(zip(ref_ids, ref_names))
+
     rows = []
     for v in var_names:
+        embedded = _EMBEDDED_ID_RE.match(v)
         if v in by_unique_name:
             gid, ref_name = by_unique_name[v]
             rows.append((v, gid, ref_name, "name"))
+        elif embedded and embedded.group(1) in name_by_id:
+            gid = embedded.group(1)
+            rows.append((v, gid, name_by_id[gid], "embedded_id"))
         elif v in by_symbol:
             gid, ref_name = by_symbol[v]
             rows.append((v, gid, ref_name, "unique_symbol"))
