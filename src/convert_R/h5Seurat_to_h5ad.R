@@ -1,24 +1,52 @@
-# Load required library
+# Convert .h5Seurat files to .h5ad with SeuratDisk.
+#
+# Usage: Rscript h5Seurat_to_h5ad.R [--outdir=DIR] [--overwrite] file1.h5Seurat file2.h5Seurat ...
+#
+# SeuratDisk writes the RNA `data` slot to X and the `counts` slot to .raw.
+# Depending on how the object was saved, `data` is either a copy of the counts
+# or log-normalized values, so the h5ad's X is NOT guaranteed to hold counts.
+# Always run `rosmap_processing data prepare` on the result, which moves the
+# counts from .raw into X and checks them.
+#
+# Without --outdir the h5ad is written next to its .h5Seurat. Existing outputs
+# are skipped unless --overwrite is given, so a failed run can be resumed.
+
 library(SeuratDisk)
 
-# Retrieve command-line arguments
 args <- commandArgs(trailingOnly = TRUE)
-
-# Check if at least one argument is provided
-if (length(args) == 0) {
-  stop("Usage: Rscript h5Seurat_to_h5ad.R file1.h5Seurat file2.h5Seurat ...")
+outdir <- NULL
+overwrite <- FALSE
+files <- character(0)
+for (a in args) {
+  if (startsWith(a, "--outdir=")) {
+    outdir <- sub("^--outdir=", "", a)
+  } else if (a == "--overwrite") {
+    overwrite <- TRUE
+  } else {
+    files <- c(files, a)
+  }
 }
 
+if (length(files) == 0) {
+  stop("Usage: Rscript h5Seurat_to_h5ad.R [--outdir=DIR] [--overwrite] file1.h5Seurat ...")
+}
+if (!is.null(outdir)) dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+
 ## Iterate over each provided .h5Seurat file and convert using a local temp dir
-for (h5Seurat_path in args) {
-  base_name <- sub("\\.h5Seurat$", "", h5Seurat_path)
-  h5ad_path <- paste0(base_name, ".h5ad")
+for (h5Seurat_path in files) {
+  base_name <- sub("\\.h5Seurat$", "", basename(h5Seurat_path))
+  target_dir <- if (is.null(outdir)) dirname(h5Seurat_path) else outdir
+  h5ad_path <- file.path(target_dir, paste0(base_name, ".h5ad"))
+
+  if (file.exists(h5ad_path) && !overwrite) {
+    cat("Skipping (output exists):", h5ad_path, "\n")
+    next
+  }
 
   cat("Converting:", h5Seurat_path, "→", h5ad_path, "\n")
 
-  # create a temporary directory next to the source file to avoid /tmp
-  src_dir <- dirname(h5Seurat_path)
-  local_temp_dir <- file.path(src_dir, ".temp_conversion")
+  # create a temporary directory next to the output to avoid /tmp
+  local_temp_dir <- file.path(target_dir, ".temp_conversion")
   dir.create(local_temp_dir, showWarnings = FALSE, recursive = TRUE)
 
   # Make sure temp files are cleaned up on error or exit for this file
@@ -60,6 +88,7 @@ for (h5Seurat_path in args) {
   })
 
   # free up memory
+  rm(seurat_obj)
   gc()
 }
 

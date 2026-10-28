@@ -4,7 +4,7 @@ A reproducible processing pipeline for ROSMAP Alzheimer's Disease
 single-cell RNA-seq datasets.
 """
 
-__version__ = "0.1.3"
+__version__ = "0.2.1"
 __author__ = "Timo Verlaan"
 __email__ = "t.verlaan@tudelft.nl"
 

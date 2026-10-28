@@ -14,6 +14,7 @@ import anndata as ad
 from tqdm import tqdm
 
 from ..utils.logging import get_logger
+from ..utils.provenance import provenance_record
 
 logger = get_logger(__name__)
 
@@ -130,15 +131,25 @@ def combine_and_save(
         merge: Strategy for uns merge
         compression: Compression method for output file
     """
-    # Combine files
+    # Combine files. With join="outer", genes missing from one input are zero in
+    # its cells (for the Green 2024 objects these were filtered out per cell
+    # class for being detected in fewer than 15 nuclei, so zero is a close
+    # approximation).
     combined_adata = combine_h5ad_files(input_paths, join=join, merge=merge)
-    
+    combined_adata.uns["provenance_combine"] = provenance_record(
+        "core combine", {"inputs": ",".join(str(p) for p in input_paths), "join": join}
+    )
+
     # Save combined file
     logger.info(f"\nSaving combined AnnData to: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     try:
-        combined_adata.write_h5ad(output_path, compression=compression)
+        # Write under a temporary name so an interrupted job never leaves a
+        # complete-looking output behind.
+        tmp_path = output_path.with_name(output_path.name + ".partial")
+        combined_adata.write_h5ad(tmp_path, compression=compression)
+        tmp_path.replace(output_path)
         logger.info(f"Successfully saved combined file ({output_path.stat().st_size / 1e6:.1f} MB)")
     except Exception as e:
         logger.error(f"Failed to save combined file: {e}")

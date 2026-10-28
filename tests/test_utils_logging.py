@@ -26,11 +26,14 @@ def test_setup_logging_with_file(temp_output_dir):
     logger = setup_logging(level="INFO", log_file=str(log_file))
     
     logger.info("Test message")
-    
-    # Close all handlers to release the file
-    for handler in logger.handlers[:]:
+
+    # Close all handlers to release the file (they sit on the root logger;
+    # Windows cannot delete the temp dir while the file is open)
+    import logging
+    root = logging.getLogger()
+    for handler in root.handlers[:]:
         handler.close()
-        logger.removeHandler(handler)
+        root.removeHandler(handler)
     
     assert log_file.exists()
     content = log_file.read_text()

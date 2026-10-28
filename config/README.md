@@ -30,7 +30,7 @@ processing:
   n_hvgs: 2000                # Number of highly variable genes
   k_neighbors: 30             # Number of neighbors for KNN graph
   n_pca_components: 50        # Number of PCA components
-  target_sum: 1000000         # CPM normalization target
+  target_sum: 10000           # Counts per cell after normalization (totals over all genes)
   log_transform: true         # Apply log1p transformation
   individual_pca: false       # Compute PCA per donor
 ```

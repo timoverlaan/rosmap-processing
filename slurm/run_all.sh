@@ -1,22 +1,18 @@
-#!/bin/sh
-#SBATCH --account=ewi-insy-prb
-#SBATCH --partition=insy,general # Request partition. Default is 'general' 
-#SBATCH --qos=long         # Request Quality of Service. Default is 'short' (maximum run time: 4 hours)
-#SBATCH --time=72:00:00      # Request run time (wall-clock). Default is 1 minute
-#SBATCH --ntasks=1          # Request number of parallel tasks per job. Default is 1
-#SBATCH --cpus-per-task=4   # Request number of CPUs (threads) per task. Default is 1 (note: CPUs are always allocated to jobs per 2).
-#SBATCH --mem=400GB          # Request memory (MB) per node. Default is 1024MB (1GB). For multiple tasks, specify --mem-per-cpu instead
-#SBATCH --mail-type=END     # Set mail type to 'END' to receive a mail when the job finishes. 
-#SBATCH --output=slurm/out/%j_all.out # Set name of output log. %j is the Slurm jobId
-#SBATCH --error=slurm/out/%j_all.out # Set name of error log. %j is the Slurm jobId
-/usr/bin/scontrol show job -d "$SLURM_JOB_ID"  # check sbatch directives are working
+#!/bin/bash
+# ROSMAP + ROSMAP-MIT: download -> raw-count h5ad files in data/v2/counts/.
+# Submit from the repo root: sbatch slurm/run_all.sh
+#SBATCH --account=daic-eemcs-insy-prb
+#SBATCH --partition=all
+#SBATCH --time=72:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=400GB
+#SBATCH --mail-type=END
+#SBATCH --output=slurm/out/%j_run_all.out
+#SBATCH --error=slurm/out/%j_run_all.out
 
-apptainer exec --writable-tmpfs --pwd /opt/app --containall \
-	--bind src/:/opt/app/src/ \
-	--bind data/:/opt/app/data/ \
-	--bind output/:/opt/app/output/ \
-	--bind config.yaml:/opt/app/config.yaml \
-	--bind token.txt:/opt/app/token.txt \
-	--env PYTHONPATH=/opt/app/src \
-	--env SLURM_JOB_ID=${SLURM_JOB_ID} \
-	./container_pixi_0-1-3.sif sh ./src/run_all.sh
+EXTRA_BINDS="--bind output/:/opt/app/output/ --bind config.yaml:/opt/app/config.yaml --bind token.txt:/opt/app/token.txt"
+source slurm/common.sh
+mkdir -p output
+
+in_container sh ./src/run_all.sh

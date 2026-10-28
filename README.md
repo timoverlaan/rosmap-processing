@@ -1,228 +1,138 @@
 # ROSMAP Processing Pipeline
 
-> Reproducible processing pipeline for ROSMAP Alzheimer's Disease single-cell RNA-seq datasets
+Processing of single-nucleus RNA-seq data from ROSMAP (two atlases) and SeaAD
+into raw-count h5ad files, per-donor kNN graph datasets, and per-donor
+aggregates for the ad-prs project.
 
-## Overview
+> **Restricted data.** ROSMAP data are access-controlled. Do not copy clinical
+> metadata, obs tables or expression values out of the cluster, into logs that
+> are shared, or into issues and chats. `utils check-counts` reports aggregate
+> statistics only; `utils validate` prints data values.
 
-This pipeline processes single-cell RNA-seq data from the ROSMAP (Religious Orders Study and Memory and Aging Project) and SeaAD datasets, integrating data from multiple sources and standardizing formats for downstream analysis.
+## Data sources
 
-## Features
+| Name in this repo | Dataset | Cells / donors | Genes (10x reference) | Source |
+|---|---|---|---|---|
+| `ROSMAP_MIT` | Mathys et al., *Cell* 2023 (MIT) | 2,342,020 / 427 | 33,538 (Cell Ranger GRCh38-3.0.0, Ensembl 93) | [Synapse syn52293417](https://www.synapse.org/#!Synapse:syn52293417) |
+| `ROSMAP` | Green et al., *Nature* 2024 (De Jager / Habib labs) | 1,649,672 / 437 | 18,745–20,326 per cell class (GRCh38-2020-A, filtered per class) | Synapse syn53366818 (see `SYNAPSE_IDS_ROSMAP`) |
+| `SeaAD` | SEA-AD, prefrontal cortex (A9) | 1,395,601 / 83 | 36,601 (GRCh38-2020-A, GENCODE v32) | [AWS open data](https://registry.opendata.aws/allen-sea-ad-atlas/) |
 
-- 🔄 **Automated data download** from Synapse and AWS S3
-- 🔬 **Scanpy-based processing** with customizable parameters
-- 📊 **Multi-dataset integration** (ROSMAP, ROSMAP-MIT, SeaAD)
-- 🐳 **Containerized workflow** using Singularity for reproducibility
-- ⚙️ **Configuration-driven** with YAML configs
-- 📝 **Comprehensive logging** for debugging and monitoring
-- 🧪 **Modular design** for easy extension
+In the Green 2024 objects each cell class keeps only genes detected in at least
+15 of its nuclei ([`subset.cell.type.R`](https://github.com/naomihabiblab/BEYOND_DLPFC/blob/487325e9624e53d34dca516da58767c386677d60/2.%20Cell-type%20analysis/utils/subset.cell.type.R#L57-L69)),
+so combining the classes fills those genes with zeros, which is a close
+approximation.
 
-## Quick Start
+Every Synapse file is pinned to a version and MD5 in `SYNAPSE_FILES`
+(`utils/constants.py`); `data download` and `data verify` check them. All of
+these entities got a new version in July 2026 (2026-07-08/09/14), but each new
+version has exactly the previous version's MD5 and size: no file changed.
 
-### Prerequisites
+## Layout on the cluster (v2)
 
-- Access to a SLURM HPC cluster
-- [Pixi](https://prefix.dev/) for dependency management
-- Synapse account with access to ROSMAP data
-- Singularity/Apptainer for containerization
+```
+data/raw/ROSMAP_MIT/          Mathys 2023 RDS + metadata (MD5-verified in place) and the .h5Seurat made from them
+data/raw/ROSMAP/              old Green copies, NOT used (rewritten in 2025, see "Data history")
+data/v2/download/ROSMAP/      Green 2024 objects + ROSMAP metadata, fresh pinned downloads
+data/reference/               Ensembl 93 and GENCODE v32 GTFs
+data/v2/converted/<DATASET>/  SeuratDisk output (X = Seurat 'data' slot, raw = counts)
+data/v2/counts/<DATASET>/     raw counts in X (int32) + clinical metadata, per class and combined.h5ad
+data/v2/counts/SeaAD/         SeaAD with ROSMAP-style columns (counts in layer 'UMIs')
+data/v2/reference/            gene maps (symbol -> Ensembl ID), shared_gene_ids.txt (MIT+SeaAD), shared_gene_ids_3way.txt (+Green)
+data/v2/processed/            processed datasets (below), mathys2023_for_adprs/
+data/v2/hvg_compare/          HVG variant lists and overlaps, per dataset
+```
 
-### Installation
+Processed datasets:
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/timoverlaan/rosmap-processing.git
-   cd rosmap-processing
-   ```
+| Files | Genes |
+|---|---|
+| `rosmap_mit_<name>.h5ad` + `seaad_<name>.h5ad` (pairs) | chosen on ROSMAP-MIT among genes SeaAD also has; SeaAD gets exactly the same genes in the same order |
+| `rosmap_mit_hvg2000_3way_k30.h5ad` + `seaad_...` + `rosmap_green_...` (triplet) | chosen on ROSMAP-MIT among genes all three have; all three identical |
+| `rosmap_green_<name>.h5ad` (standalone) | Green 2024's own HVGs |
 
-2. **Install dependencies with Pixi:**
-   ```bash
-   pixi install
-   ```
+Genes are matched by Ensembl ID (`var['gene_id']`); `var_names` are the
+ROSMAP-MIT symbols in pairs and triplets. Each processed file has
+`layers['counts']`, X = log1p(counts / total × 1e4) with totals over all genes,
+`obs['total_counts']`, `obs['Donor ID']` (projid; for Green 2024 its
+individualID), a per-donor kNN graph, and `uns['provenance_*']` with parameters
+and the git commit. Green cells without a donor ID are dropped (counted in the log).
 
-3. **Set up configuration:**
-   
-   Copy the default config and customize it:
-   ```bash
-   cp config/default_config.yaml config.yaml
-   # Edit config.yaml to adjust processing parameters
-   ```
-   
-   See [config/README.md](config/README.md) for configuration details.
+Green 2024 and Mathys 2023 are both ROSMAP DLPFC atlases and very likely share
+many participants: do not use one to validate a model trained on the other.
+SeaAD is an independent cohort.
 
-4. **Set up authentication:**
-   
-   Create a `token.txt` file with your Synapse token:
-   ```bash
-   echo "your_synapse_token" > token.txt
-   ```
-   
-   Or set an environment variable:
-   ```bash
-   export SYNAPSE_AUTH_TOKEN="your_synapse_token"
-   ```
-   
-   **⚠️ Important:** Never commit `token.txt` or `config.yaml` to git!
+## Running on DAIC
 
-5. **Build the container (on cluster):**
-   ```bash
-   # Submit container build job
-   sbatch slurm/build_container.sh
-   ```
-
-### Basic Usage
-
-The pipeline provides a unified command-line interface:
+Submit from the repo root, with a valid Kerberos ticket (`klist`; `kinit -R`).
+The scripts use account `daic-eemcs-insy-prb`, partition `all`, and the
+container `container_pixi_0-2-1.sif` (code is mounted from `src/`, so code
+changes need no rebuild). Each step skips outputs that already exist, so a
+failed job can be resubmitted.
 
 ```bash
-# Download data
-pixi run rosmap-process download --dataset rosmap
-
-# Process data with default settings
-pixi run rosmap-process analyze input.h5ad --output processed.h5ad
-
-# Run full pipeline with custom config
-pixi run rosmap-process pipeline --config config/rosmap_config.yaml
+bash slurm/download_references.sh                 # login node: the two GTFs (~85 MB)
+sbatch slurm/smoke_test.sh                        # unit tests + R check in the container (minutes)
+sbatch slurm/run_all.sh                           # downloads Green (~112 GB), verifies MIT, -> data/v2/counts (long)
+sbatch slurm/run_all_seaad.sh                     # SeaAD -> data/v2/counts/SeaAD (optional, see below)
+sbatch slurm/inspect_counts.sh                    # check the count files (aggregate output only)
+sbatch slurm/gene_maps.sh                         # gene maps + shared Ensembl IDs
+sbatch slurm/hvg_compare.sh                       # HVG variants (per donor vs pooled, ...) and their overlaps
+sbatch slurm/regular_hvg.sh                       # hvg{1000,2000,3000}_k30 pairs
+sbatch slurm/regular_hvg_postnorm.sh              # hvg{...}_postnorm_k30 pairs
+sbatch slurm/lieke_hvg.sh                         # lieke_hvg_k30 pair
+sbatch slurm/lieke_allgenes_hvg.sh                # lieke_allgenes_hvg2k_k30 pair
+sbatch slurm/lieke_allgenes_hvg_postnorm.sh       # lieke_allgenes_hvg2k_postnorm_k30 pair
+sbatch slurm/rosmap_mathys_genes.sh               # mathys2019degs_k30 pair
+sbatch slurm/aligned_hvg.sh                       # hvg2000_3way_k30 triplet (MIT, SeaAD, Green)
+sbatch slurm/green_hvg.sh                         # Green 2024 standalone: hvg{1000,2000,3000}[_postnorm]_k30
+sbatch slurm/mathys2023_for_adprs.sh              # ad-prs aggregates
 ```
 
-For SLURM cluster usage:
+HVGs are selected per donor by default (`--hvg-batch-key "Donor ID"`): genes
+must vary between cells within donors, so donor-level differences (sex genes,
+batch) do not drive the selection, but neither do genuine between-donor
+(e.g. disease) differences. For a pooled variant of any pair, add
+`--hvg-batch-key none` with a new name, e.g.
+`process_pair "hvg2000_pooled_k30" --n-genes 2000 --hvg-batch-key none`.
 
-```bash
-# Submit processing job
-sbatch slurm/jobs/rosmap_top1k_genes.sh
+Chain them with `--dependency=afterok:<jobid>`. Without `run_all_seaad.sh`, the
+SeaAD jobs read the original download in `data/seaAD/` (set `SEAAD_H5AD` to
+override).
 
-# Run complete ROSMAP pipeline
-sbatch slurm/jobs/run_all.sh
+## Data history: the April 2026 outputs
 
-# Run SeaAD pipeline
-sbatch slurm/jobs/run_all_seaad.sh
-```
+The files in `data/raw/*/`*.h5ad, `data/processed/` and `data/seaAD/.../seaad_*`
+from April 2026 should not be used:
 
-## Project Structure
+- SeuratDisk writes Seurat's `data` slot to X and the counts to `.raw`. The old
+  pipeline then deleted `.raw`. For ROSMAP-MIT Immune_cells, Inhibitory_neurons
+  and OPCs (504,090 cells), and Green cux2+ and inhibitory, `data` was
+  log-normalized, so X held log-normalized values that were normalized again.
+  The ad-prs `mean_expr` for In, Mic and Opc is affected the same way.
+- Library sizes were computed after HVG subsetting, with a 1e6 target.
+- The ROSMAP-MIT and SeaAD outputs had different gene orders, and genes were
+  matched by symbol across different 10x references.
+- From May to November 2025 the h5Seurat conversion script saved the loaded
+  object back over the downloaded file (`SaveH5Seurat(..., overwrite = TRUE)`,
+  commits b011398 to 68bd6c0). Six of the seven Green `.h5Seurat` files in
+  `data/raw/ROSMAP/` therefore match no Synapse version (only `cux2-`, downloaded
+  again afterwards, does). v2 downloads them fresh into `data/v2/download/ROSMAP/`.
+- The ad-prs `donor_metadata.tsv` joined clinical data on projid as text, but the
+  clinical CSV pads projid to 8 characters, so donors whose projid starts with a
+  zero got no clinical fields.
 
-```
-rosmap-processing/
-├── src/rosmap_processing/    # Main Python package
-│   ├── core/                  # Core processing logic
-│   ├── data/                  # Data handling utilities
-│   ├── utils/                 # Shared utilities
-│   └── cli/                   # Command-line interface
-├── scripts/                   # Operational scripts
-├── slurm/                     # SLURM job scripts
-├── config/                    # Configuration files
-├── docs/                      # Documentation
-├── tests/                     # Test suite
-└── data/                      # Data directory (gitignored)
-```
-
-## Configuration
-
-Processing parameters can be customized via YAML configuration files:
-
-```yaml
-# config/custom_config.yaml
-processing:
-  min_genes: 200
-  n_hvgs: 2000
-  k_neighbors: 30
-  
-paths:
-  raw_data: "data/raw"
-  processed: "data/processed"
-```
-
-See `config/default_config.yaml` for all available options.
-
-## Documentation
-
-- [Installation Guide](docs/installation.md) - Detailed setup instructions
-- [Usage Guide](docs/usage.md) - Common usage patterns
-- [Pipeline Overview](docs/pipeline.md) - Pipeline architecture
-- [Troubleshooting](docs/troubleshooting.md) - Common issues
-
-## Data Sources
-
-This pipeline processes data from:
-
-- **ROSMAP:** Single-nucleus RNA-seq from human prefrontal cortex
-  - Source: [Synapse](https://www.synapse.org/#!Synapse:syn21125841)
-  - Citation: [Mathys et al., Nature 2019](https://doi.org/10.1038/s41586-019-1195-2)
-
-- **ROSMAP-MIT:** Extended ROSMAP multiomics dataset
-  - Source: [Synapse](https://www.synapse.org/#!Synapse:syn52293417)
-
-- **SeaAD:** Seattle Alzheimer's Disease Brain Cell Atlas
-  - Source: [AWS S3](https://registry.opendata.aws/allen-sea-ad-atlas/)
-  - Citation: [SEA-AD Consortium](https://portal.brain-map.org/explore/seattle-alzheimers-disease)
+The v2 pipeline fixes all of these; `data prepare`, `pipeline scanpy` and the
+ad-prs aggregation now fail on input that is not raw counts, and every input is
+checked against its pinned Synapse MD5.
 
 ## Development
 
-### Setting up development environment
-
 ```bash
-# Install with dev dependencies
-pixi install --all
-
-# Run tests
-pixi run pytest
-
-# Format code
-pixi run black src/ tests/
-
-# Lint code
-pixi run ruff src/ tests/
+pixi install
+pixi run pytest -m "not integration"
 ```
 
-### Running tests
+The seurat_v3 test is skipped when scikit-misc's loess does not work (the
+Windows build); the container's Linux build is the one that matters.
 
-```bash
-# Run all tests
-pixi run pytest
-
-# Run with coverage
-pixi run pytest --cov=rosmap_processing
-
-# Run specific test file
-pixi run pytest tests/test_specific.py
-```
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## Citation
-
-If you use this pipeline in your research, please cite:
-
-```bibtex
-@software{rosmap_processing,
-  author = {Verlaan, Timo},
-  title = {ROSMAP Processing Pipeline},
-  year = {2025},
-  url = {https://github.com/timoverlaan/rosmap-processing}
-}
-```
-
-And the original ROSMAP data sources as appropriate.
-
-## License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- ROSMAP study participants and investigators
-- Rush Alzheimer's Disease Center
-- MIT-ROSMAP consortium
-- Allen Institute for Brain Science (SEA-AD)
-
-## Contact
-
-**Timo Verlaan**  
-Email: t.verlaan@tudelft.nl  
-GitHub: [@timoverlaan](https://github.com/timoverlaan)
-
-## Version History
-
-- **v0.2.0** (2025-11-10): Restructured with modular architecture
-- **v0.1.2**: Container updates
-- **v0.1.1**: Initial container version
-- **v0.1.0**: Initial release
+See [CLI_REFERENCE.md](CLI_REFERENCE.md) for all commands and options.

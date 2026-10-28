@@ -19,6 +19,7 @@ import scanpy as sc
 import scipy.sparse as sp
 from tqdm import tqdm
 
+from ..utils.counts import assert_integer_counts
 from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -47,10 +48,25 @@ NORMALIZATION_TARGET_SUM = 1e4
 DONOR_ID_COL = "projid"
 SUBTYPE_COL = "cell_type_high_resolution"
 
+DEFAULT_INPUT_DIR = "data/v2/counts/ROSMAP_MIT"
+DEFAULT_OUTPUT_DIR = "data/v2/processed/mathys2023_for_adprs"
+
 OUTPUT_PARQUET_NAME = "per_donor_celltype_expression.parquet"
 DONOR_METADATA_NAME = "donor_metadata.tsv"
 README_NAME = "README.md"
 INTERMEDIATE_DIR = "_intermediate"
+
+
+def normalize_projid(values) -> np.ndarray:
+    """projid as a string without leading zeros or a trailing '.0'.
+
+    The clinical CSV pads projid to 8 characters ('00123456'); in the AnnData it
+    is an integer (123456). Joining the raw strings would silently drop every
+    donor whose projid starts with a zero.
+    """
+    s = pd.Series(values).astype(str).str.strip()
+    s = s.str.replace(r"\.0+$", "", regex=True).str.lstrip("0")
+    return s.replace("", "0").to_numpy()
 
 
 def _resolve_input_files(
@@ -152,20 +168,26 @@ def _materialize_long(
     group_cell_types: np.ndarray,
     granularity: str,
     gene_symbols: np.ndarray,
+    gene_ids: Optional[np.ndarray] = None,
 ) -> pd.DataFrame:
     """Per-group dense matrices -> long-format DataFrame (one row per gene-group)."""
     n_groups, n_genes = mean_log.shape
-    return pd.DataFrame(
+    columns = {
+        "donor_id": np.repeat(group_donors, n_genes),
+        "granularity": granularity,
+        "cell_type": np.repeat(group_cell_types, n_genes),
+        "gene_symbol": np.tile(gene_symbols, n_groups),
+    }
+    if gene_ids is not None:
+        columns["gene_id"] = np.tile(gene_ids, n_groups)
+    columns.update(
         {
-            "donor_id": np.repeat(group_donors, n_genes),
-            "granularity": granularity,
-            "cell_type": np.repeat(group_cell_types, n_genes),
-            "gene_symbol": np.tile(gene_symbols, n_groups),
             "mean_expr": mean_log.ravel().astype(np.float32),
             "frac_expressed": frac.ravel().astype(np.float32),
             "n_cells": np.repeat(n_cells.astype(np.int32), n_genes),
         }
     )
+    return pd.DataFrame(columns)
 
 
 def _write_chunk(df: pd.DataFrame, path: Path) -> None:
@@ -174,6 +196,8 @@ def _write_chunk(df: pd.DataFrame, path: Path) -> None:
     df["granularity"] = df["granularity"].astype("category")
     df["cell_type"] = df["cell_type"].astype("category")
     df["gene_symbol"] = df["gene_symbol"].astype("category")
+    if "gene_id" in df.columns:
+        df["gene_id"] = df["gene_id"].astype("category")
     df.to_parquet(path, compression="zstd", index=False)
     logger.info(
         f"  wrote {path.name} ({path.stat().st_size / 1e6:.1f} MB, {len(df)} rows)"
@@ -184,8 +208,11 @@ def process_class_file(
     h5ad_path: Path,
     major_label: str,
     output_dir: Path,
+    gene_map: Optional[Dict[str, str]] = None,
 ) -> Tuple[Path, Path, pd.DataFrame]:
     """Aggregate one per-class h5ad and write its major + subtype parquet chunks.
+
+    `gene_map` (symbol -> Ensembl ID) adds a gene_id column; unmapped genes get "".
 
     Returns
     -------
@@ -203,25 +230,22 @@ def process_class_file(
             f"{h5ad_path}: missing '{SUBTYPE_COL}' in obs. Did category-fix run?"
         )
 
-    donor_ids = adata.obs[DONOR_ID_COL].astype(str).values
+    donor_ids = normalize_projid(adata.obs[DONOR_ID_COL])
     subtypes = adata.obs[SUBTYPE_COL].astype(str).values
     gene_symbols = adata.var_names.astype(str).values
+    gene_ids = (
+        np.array([gene_map.get(g, "") for g in gene_symbols], dtype=object)
+        if gene_map is not None else None
+    )
+
+    # The aggregates assume raw counts; the April 2026 run silently
+    # re-normalized three log-normalized classes, so this is a hard error now.
+    assert_integer_counts(adata.X, name=f"{h5ad_path.name} X")
 
     X = adata.X
     if not sp.isspmatrix_csr(X):
         X = sp.csr_matrix(X)
     X_raw = X.astype(np.float32)
-
-    # Sanity: warn if X doesn't look like raw counts.
-    if X_raw.nnz:
-        sample = X_raw.data[: min(X_raw.nnz, 1000)]
-        whole = float(np.mean(sample == np.floor(sample)))
-        if whole < 0.99:
-            logger.warning(
-                f"{h5ad_path.name}: only {whole * 100:.1f}% of nonzero values are "
-                f"integers — input may already be normalized. Aggregates assume "
-                f"raw counts in X."
-            )
 
     X_lognorm = _normalize_lognormed(X_raw)
 
@@ -243,6 +267,7 @@ def process_class_file(
         group_cell_types=np.full(n_donors, major_label),
         granularity="major",
         gene_symbols=gene_symbols,
+        gene_ids=gene_ids,
     )
 
     # Subtype-level: group by (donor, cell_type_high_resolution).
@@ -263,6 +288,7 @@ def process_class_file(
         group_cell_types=pair_cts,
         granularity="subtype",
         gene_symbols=gene_symbols,
+        gene_ids=gene_ids,
     )
 
     out_dir = output_dir / INTERMEDIATE_DIR
@@ -310,8 +336,11 @@ def consolidate_chunks(chunk_paths: List[Path], output_path: Path) -> None:
     df = pd.concat(dfs, ignore_index=True)
 
     # groupby on category dtype with non-overlapping categories across chunks
-    # mishandles values; cast key columns to str for the groupby.
+    # mishandles values; cast key columns to str for the groupby. gene_id, when
+    # present, is 1:1 with gene_symbol, so grouping on it too changes nothing.
     key_cols = ["donor_id", "granularity", "cell_type", "gene_symbol"]
+    if "gene_id" in df.columns:
+        key_cols.append("gene_id")
     for col in key_cols:
         df[col] = df[col].astype(str)
 
@@ -328,14 +357,13 @@ def consolidate_chunks(chunk_paths: List[Path], output_path: Path) -> None:
     agg["mean_expr"] = (agg["_mean_x_n"] / agg["_n"]).astype(np.float32)
     agg["frac_expressed"] = (agg["_frac_x_n"] / agg["_n"]).astype(np.float32)
     agg["n_cells"] = agg["_n"].astype(np.int32)
-    agg = agg[
-        ["donor_id", "granularity", "cell_type", "gene_symbol",
-         "mean_expr", "frac_expressed", "n_cells"]
-    ]
+    agg = agg[key_cols + ["mean_expr", "frac_expressed", "n_cells"]]
     agg["donor_id"] = agg["donor_id"].astype(str)
     agg["granularity"] = agg["granularity"].astype("category")
     agg["cell_type"] = agg["cell_type"].astype("category")
     agg["gene_symbol"] = agg["gene_symbol"].astype("category")
+    if "gene_id" in agg.columns:
+        agg["gene_id"] = agg["gene_id"].astype("category")
     agg.to_parquet(output_path, compression="zstd", index=False)
     logger.info(
         f"  consolidated {len(chunk_paths)} chunks -> {output_path.name} "
@@ -411,6 +439,7 @@ def build_donor_metadata(
     ].sum(axis=1)
 
     clinical = pd.read_csv(clinical_csv, dtype={"projid": str})
+    clinical["projid"] = normalize_projid(clinical["projid"])
     keep_rename = {
         "projid": "donor_id",
         "msex": "sex",
@@ -446,9 +475,25 @@ def write_readme(
     n_donors: int,
     n_genes: int,
     total_cells: int,
+    input_dir: Optional[Path] = None,
+    has_gene_ids: bool = False,
 ) -> None:
     files_block = "\n".join(
         f"- {p.name} -> {major}" for p, major in files_processed.items()
+    )
+    input_dir_text = f"`{input_dir}`" if input_dir is not None else "the input directory"
+    gene_id_row = (
+        "| gene_id | category | Ensembl gene ID (unversioned, Ensembl 93) from the gene map; \"\" where the symbol could not be mapped |\n"
+        if has_gene_ids else ""
+    )
+    gene_id_text = (
+        "The `gene_id` column holds the Ensembl ID of each symbol, from a gene map\n"
+        "built by `rosmap_processing genes build-map` against the Ensembl 93 GTF\n"
+        "with the Cell Ranger GRCh38-3.0.0 filters. Use it rather than the symbol\n"
+        "to join with other annotations."
+        if has_gene_ids else
+        "This run had no gene map, so only symbols are given. Resolve them to\n"
+        "Ensembl IDs with the Ensembl 93 GTF (or rerun with `--gene-map`)."
     )
     text = f"""# Mathys 2023 per-donor x cell-type aggregates for ad-prs
 
@@ -464,9 +509,10 @@ from this repo (rosmap-processing). Consumer: ad-prs.
 ## Source
 
 ROSMAP / MIT-lineage snRNA-seq atlas (Mathys et al., Cell 2023). Input was
-the per-cell-class h5ads under `data/raw/ROSMAP_MIT/`, after the existing
-`run_all.sh` conversion + metadata + category-fix pipeline. Synapse IDs are
-in `src/rosmap_processing/utils/constants.py:SYNAPSE_IDS_ROSMAP_MIT`.
+the per-cell-class h5ads under {input_dir_text}, produced by `run_all.sh`
+(`data prepare`: raw counts taken from the Seurat `counts` slot and checked
+to be integers over the whole matrix). Synapse IDs are in
+`src/rosmap_processing/utils/constants.py:SYNAPSE_IDS_ROSMAP_MIT`.
 
 Per-class files processed and their major-class harmonization:
 
@@ -492,11 +538,11 @@ count > 0 for that gene). `n_cells` is the number of cells in the bucket.
 
 | column | dtype | notes |
 |---|---|---|
-| donor_id | str (categorical) | `projid` from the AnnData |
+| donor_id | str (categorical) | `projid` without leading zeros (ROSMAP_clinical.csv pads it to 8 characters) |
 | granularity | category | "major" or "subtype" |
 | cell_type | category | major: Ex/In/Ast/Mic/Oli/Opc; subtype: verbatim `cell_type_high_resolution` |
-| gene_symbol | category | verbatim `var_names` from the AnnData (HGNC symbol from the 10x reference; ~33,538 features in the GRCh38 / GENCODE v32 build that 10x uses) |
-| mean_expr | float32 | mean log-normalized expression |
+| gene_symbol | category | verbatim `var_names` from the AnnData: the 33,538 features of the Cell Ranger GRCh38-3.0.0 reference (Ensembl 93) |
+{gene_id_row}| mean_expr | float32 | mean log-normalized expression |
 | frac_expressed | float32 | fraction with raw count > 0 |
 | n_cells | int32 | cells in (donor, cell_type) bucket |
 
@@ -538,11 +584,13 @@ same `Sigma(n_i * x_i) / Sigma(n_i)` form on the per-donor rows.
 
 ## Gene IDs
 
-The atlas h5ads only carry HGNC symbols in `var_names` (the `gene_id` column
-was dropped during the RDS -> h5Seurat -> h5ad conversion). We pass symbols
-through verbatim. **Resolve to Ensembl in the consumer (ad-prs).** The
-underlying 10x reference is GRCh38 / GENCODE v32; ad-prs should use a
-matching GTF for the +/-30 kb windowing step.
+The atlas objects carry only gene symbols (no gene IDs in the Seurat
+objects). The 33,538 features match the Cell Ranger GRCh38-3.0.0 reference,
+which is built from the **Ensembl 93** GTF (not GENCODE v32, which is the
+later GRCh38-2020-A reference with 36,601 features). ad-prs should use an
+Ensembl 93 (or ID-matched) GTF for the +/-30 kb windowing step.
+
+{gene_id_text}
 
 ## Donor selection
 
@@ -606,6 +654,7 @@ def run_pipeline(
     file_to_major: Optional[Dict[str, str]] = None,
     keep_intermediate: bool = False,
     resume: bool = False,
+    gene_map_path: Optional[Path] = None,
 ) -> None:
     """End-to-end aggregation: per-class h5ads -> long parquet + donor metadata + README.
 
@@ -614,12 +663,20 @@ def run_pipeline(
     rebuild the donor-metadata + README only. Useful for recovering from
     failures in the post-aggregation steps (e.g. a wrong clinical CSV path)
     without redoing the multi-hour aggregation pass.
+
+    `gene_map_path` (TSV from `genes build-map`) adds an Ensembl gene_id column.
     """
     file_to_major = file_to_major or FILE_TO_MAJOR
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     clinical_csv = Path(clinical_csv)
     mit_metadata_csv = Path(mit_metadata_csv) if mit_metadata_csv else None
+    gene_map = None
+    if gene_map_path is not None:
+        from ..data.genes import load_gene_map
+
+        gene_map = load_gene_map(gene_map_path)
+        logger.info(f"Gene map: {gene_map_path} ({len(gene_map)} mapped symbols)")
 
     logger.info("=" * 60)
     logger.info("Mathys 2023 -> ad-prs aggregation")
@@ -657,6 +714,9 @@ def run_pipeline(
         n_genes_seen = pd.read_parquet(
             out_parquet_for_resume, columns=["gene_symbol"]
         )["gene_symbol"].nunique()
+        import pyarrow.parquet as pq
+
+        has_gene_ids = "gene_id" in pq.read_schema(str(out_parquet_for_resume)).names
         donor_meta = build_donor_metadata(cell_counts, clinical_csv, mit_metadata_csv)
         out_meta = output_dir / DONOR_METADATA_NAME
         donor_meta.to_csv(out_meta, sep="\t", index=False)
@@ -667,6 +727,8 @@ def run_pipeline(
             n_donors=len(donor_meta),
             n_genes=int(n_genes_seen),
             total_cells=int(donor_meta["total_cells"].sum()),
+            input_dir=input_dir,
+            has_gene_ids=has_gene_ids,
         )
         logger.info("=" * 60)
         logger.info("Done (resume).")
@@ -685,7 +747,7 @@ def run_pipeline(
     all_raw_chunks: List[Path] = []
     n_genes_seen: Optional[int] = None
     for path, major in tqdm(files.items(), desc="Per-class aggregation"):
-        major_path, subtype_path, cc = process_class_file(path, major, output_dir)
+        major_path, subtype_path, cc = process_class_file(path, major, output_dir, gene_map)
         slot = chunks_by_major.setdefault(major, {"major": [], "subtype": []})
         slot["major"].append(major_path)
         slot["subtype"].append(subtype_path)
@@ -729,6 +791,8 @@ def run_pipeline(
         n_donors=len(donor_meta),
         n_genes=n_genes,
         total_cells=total_cells,
+        input_dir=input_dir,
+        has_gene_ids=gene_map is not None,
     )
 
     if not keep_intermediate:
@@ -766,20 +830,26 @@ def main() -> None:
     parser.add_argument(
         "--input-dir",
         type=Path,
-        default=Path("data/raw/ROSMAP_MIT"),
-        help="Directory containing per-class h5ad files (default: data/raw/ROSMAP_MIT)",
+        default=Path(DEFAULT_INPUT_DIR),
+        help=f"Directory containing per-class count h5ad files (default: {DEFAULT_INPUT_DIR})",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("data/processed/mathys2023_for_adprs"),
-        help="Directory to write outputs into (default: data/processed/mathys2023_for_adprs)",
+        default=Path(DEFAULT_OUTPUT_DIR),
+        help=f"Directory to write outputs into (default: {DEFAULT_OUTPUT_DIR})",
+    )
+    parser.add_argument(
+        "--gene-map",
+        type=Path,
+        default=None,
+        help="Gene map TSV from `genes build-map`; adds an Ensembl gene_id column",
     )
     parser.add_argument(
         "--clinical-csv",
         type=Path,
-        default=Path("data/raw/ROSMAP/ROSMAP_clinical.csv"),
-        help="ROSMAP clinical CSV (default: data/raw/ROSMAP/ROSMAP_clinical.csv)",
+        default=Path("data/v2/download/ROSMAP/ROSMAP_clinical.csv"),
+        help="ROSMAP clinical CSV (default: data/v2/download/ROSMAP/ROSMAP_clinical.csv)",
     )
     parser.add_argument(
         "--mit-metadata-csv",
@@ -817,6 +887,7 @@ def main() -> None:
         mit_metadata_csv=args.mit_metadata_csv,
         keep_intermediate=args.keep_intermediate,
         resume=args.resume,
+        gene_map_path=args.gene_map,
     )
 
 

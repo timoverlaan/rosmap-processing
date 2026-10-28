@@ -1,253 +1,167 @@
 # ROSMAP Processing CLI Reference
 
-## Overview
+All commands run as `python -m rosmap_processing <group> <command>` (inside the
+container: `pixi run python -m rosmap_processing ...`). Add `-v` for debug
+logging; every command has `--help`.
 
-The rosmap-processing package now has a unified CLI interface accessible via:
+Commands that write files never modify their input, and refuse to replace an
+existing output unless `--overwrite` is given.
+
+## data
+
+### `data download`
 ```bash
-python -m rosmap_processing <command> <subcommand> [options]
+python -m rosmap_processing data download [--dataset all|rosmap|rosmap-mit] \
+    [--output-dir data/raw] [--include-raw-h5ad]
 ```
+Downloads the pinned versions in `SYNAPSE_FILES` (`utils/constants.py`) into
+`<output-dir>/ROSMAP` and `<output-dir>/ROSMAP_MIT`, and checks each file's size
+and MD5. A file that is already present is kept if it matches and is an error
+if it does not (it is never overwritten). The 103 GB unfiltered ROSMAP-MIT h5ad
+is only fetched with `--include-raw-h5ad`. Needs `SYNAPSE_AUTH_TOKEN` or
+`token.txt` only when something has to be downloaded.
 
-## Command Structure
-
-### Data Commands
-Manage and prepare data files.
-
-#### Download ROSMAP Data
+### `data verify`
 ```bash
-python -m rosmap_processing data download
+python -m rosmap_processing data verify --dataset rosmap|rosmap-mit --dir <directory>
 ```
-Downloads ROSMAP and ROSMAP-MIT data from Synapse.
+Checks size and MD5 of the pinned files in a directory; exits non-zero on any
+missing or mismatched file. Needs no Synapse login.
 
-#### Fix Categorical Columns
+### `data prepare`
 ```bash
-python -m rosmap_processing data category-fix <input.h5ad> [options]
+python -m rosmap_processing data prepare <converted.h5ad> --output <counts.h5ad> \
+    [--columns cell_type_high_resolution ...] [--metadata data/v2/download/ROSMAP/ROSMAP_clinical.csv]
 ```
-Converts specified columns to categorical type and optionally removes raw data layer.
+Takes a SeuratDisk-converted h5ad (X = Seurat `data` slot, `.raw` = counts),
+puts the counts in X as int32, checks that every stored value is a
+non-negative integer (fails otherwise), makes the given obs columns
+categorical, and merges clinical metadata on `projid` (or `individualID`).
 
-**Options:**
-- `--columns COLUMN [COLUMN ...]` - Columns to convert to categorical (default: cell_type_high_resolution)
-- `--remove-raw` - Remove raw data layer to save space
-
-**Example:**
+### `data category-fix`
 ```bash
-python -m rosmap_processing data category-fix data/raw/ROSMAP_MIT/Astrocytes.h5ad \
-    --columns cell_type_high_resolution --remove-raw
+python -m rosmap_processing data category-fix <input.h5ad> [--columns ...] [--remove-raw]
 ```
+Makes obs columns categorical, in place. `--remove-raw` is refused when X does
+not hold counts, because `.raw` is then the only copy of them.
 
-#### Add Metadata
+### `data metadata`
 ```bash
-python -m rosmap_processing data metadata <input.h5ad> <metadata.csv> [options]
+python -m rosmap_processing data metadata <input.h5ad> <metadata.csv> [--output <out.h5ad>]
 ```
-Adds metadata from CSV file to h5ad file (modifies in place).
+Merges a clinical CSV into obs. Without `--output` the input is modified in place.
 
-**Options:**
-- `--mit` - Use MIT data format (uses different ID column for matching)
+## core
 
-**Examples:**
+### `core combine`
 ```bash
-# For regular ROSMAP data
-python -m rosmap_processing data metadata data/raw/ROSMAP/astrocytes.h5ad \
-    data/raw/ROSMAP/rosmap_clinical.csv
-
-# For MIT data
-python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Immune_cells.h5ad \
-    data/raw/ROSMAP/rosmap_clinical.csv --mit
+python -m rosmap_processing core combine <a.h5ad> <b.h5ad> ... --output <combined.h5ad>
 ```
+Concatenates cells (outer join on genes; a gene missing from one input is zero
+in its cells).
 
----
-
-### Core Processing Commands
-Core data processing operations.
-
-#### Combine Files
+### `core column-mapping`
 ```bash
-python -m rosmap_processing core combine <input1.h5ad> <input2.h5ad> ... --output <output.h5ad>
+python -m rosmap_processing core column-mapping <input.h5ad> --data-type SeaAD --output <out.h5ad>
 ```
-Combines multiple h5ad files into a single file.
+Adds ROSMAP-style columns to SeaAD (`braaksc`, `ceradsc`, `thalsc`, Wang labels).
+Also supports `ROSMAP` and `ROSMAP_MIT` renames (not used by the pipeline).
 
-**Example:**
+## genes
+
+### `genes build-map`
 ```bash
-python -m rosmap_processing core combine \
-    data/raw/ROSMAP/astrocytes.h5ad \
-    data/raw/ROSMAP/cux2+.h5ad \
-    data/raw/ROSMAP/microglia.h5ad \
-    --output data/raw/ROSMAP/combined.h5ad
+python -m rosmap_processing genes build-map --gtf <annotation.gtf.gz> \
+    --recipe cellranger-GRCh38-3.0.0|cellranger-GRCh38-2020-A --h5ad <data.h5ad> --output <map.tsv>
 ```
+Rebuilds the 10x reference's gene list from the GTF it was built from and maps
+each gene symbol of the h5ad to an Ensembl ID. Output TSV columns: `var_name`,
+`gene_id`, `ref_name`, `method` (`position` when the rebuilt list matches the
+data exactly, else `name`, `unique_symbol`, `unmatched` or `ambiguous`).
 
-#### Column Mapping
+| Dataset | Reference | GTF |
+|---|---|---|
+| ROSMAP-MIT (Mathys 2023), 33,538 genes | `cellranger-GRCh38-3.0.0` | Ensembl 93 |
+| SeaAD, Green 2024 ROSMAP, 36,601 genes | `cellranger-GRCh38-2020-A` | GENCODE v32 |
+
+### `genes shared`
 ```bash
-python -m rosmap_processing core column-mapping <input.h5ad> --data-type <TYPE> [options]
+python -m rosmap_processing genes shared <map_a.tsv> <map_b.tsv> [<map_c.tsv> ...] --output <shared_ids.txt>
 ```
-Converts column names between ROSMAP and SeaAD formats.
+Ensembl IDs mapped in every given map, in the first map's order.
 
-**Required Options:**
-- `--data-type {ROSMAP,ROSMAP_MIT,SeaAD}` - Type of input data
+## pipeline
 
-**Optional:**
-- `--output <file>` - Output file path (if not using --inplace)
-- `--inplace` - Modify file in place
-- `--cellclass <class>` - Cell class (required for ROSMAP_MIT)
-- `--subclass <subclass>` - Cell subclass (required for ROSMAP_MIT)
-
-**Examples:**
+### `pipeline scanpy`
 ```bash
-# Regular ROSMAP data
-python -m rosmap_processing core column-mapping data/raw/ROSMAP/astrocytes.h5ad \
-    --data-type ROSMAP --inplace
-
-# MIT data (requires cell class/subclass)
-python -m rosmap_processing core column-mapping data/raw/ROSMAP_MIT/Immune_cells.h5ad \
-    --data-type ROSMAP_MIT --cellclass Glia --subclass Immune --inplace
-
-# SeaAD data
-python -m rosmap_processing core column-mapping data/seaAD/sample.h5ad \
-    --data-type SeaAD --inplace
+python -m rosmap_processing pipeline scanpy <counts.h5ad> <output.h5ad> [options]
 ```
+1. Takes the counts from X (or `--layer`, `--raw`) and checks they are integers.
+2. Filters cells (`--min-genes`, default 200) and, unless a gene list is
+   imported, genes (`--min-cells`, default 5).
+3. Computes per-cell totals over all genes, used for normalization.
+4. Chooses genes (below), then sets X = log1p(counts / total × `--target-sum`)
+   (default 1e4) and keeps the counts in `layers['counts']`.
+5. PCA (`--n-pcs`, default 50; `--individual-pca` for per donor) and a kNN graph
+   per donor (`--k-neighbors`, default 30).
 
----
+Gene choice:
 
-### Pipeline Commands
-Complete processing pipelines.
+| Options | Genes |
+|---|---|
+| (none) | `--n-genes` HVGs, seurat_v3 on counts |
+| `--hvg-after-normalize N` | N HVGs, seurat flavor on log-normalized values |
+| `--import-genes list.txt` | the listed genes (symbols or Ensembl IDs) |
+| `--import-genes list.txt --hvg-after-import N` | N HVGs (seurat_v3) within the list |
+| `--import-genes list.txt --hvg-after-normalize N` | N HVGs (seurat) within the list |
+| `--import-genes reference.h5ad` | exactly the reference's genes, in its order; fails on missing genes unless `--allow-missing-genes` (zero-fills) |
 
-#### Scanpy Pipeline
+Other options: `--hvg-batch-key` (default `Donor ID`, `none` to pool),
+`--gene-map map.tsv` (adds `var['gene_id']`, used for matching),
+`--restrict-genes list.txt` (all choices are made within this list, e.g. the
+output of `genes shared`), `--donor-column COL` (obs column with the donor,
+copied to `Donor ID`; default `Donor ID`, else `projid`; cells without a donor
+are dropped), `--overwrite`.
+
+Writes `<output>_hvg_scores.tsv` and `<output>_hvg_names.txt` when HVGs are
+selected, and records parameters and the git commit in `uns['provenance_scanpy']`.
+
+### `pipeline hvg-compare`
 ```bash
-python -m rosmap_processing pipeline scanpy <input.h5ad> <output.h5ad> [options]
+python -m rosmap_processing pipeline hvg-compare <counts.h5ad> --output-dir <dir> \
+    [--n-genes 1000 2000 3000] [--flavors seurat_v3 seurat] [--batch-keys "Donor ID" none] \
+    [--gene-map map.tsv] [--restrict-genes list.txt] [--compare NAME=PATH ...]
 ```
-Runs the full scanpy processing pipeline: filtering, normalization, HVG selection, PCA, and KNN graph construction.
+Loads the counts once and runs every combination of flavor, batch handling and
+size, with the same filtering and normalization as `pipeline scanpy`. Writes
+`hvg_<flavor>_<donor|pooled>_<n>.txt` (selected genes, ranked),
+`hvg_overlap.tsv` (every pair of lists: sizes, intersection, Jaccard) and
+`hvg_overlap_summary.tsv` (per-donor vs pooled per flavor and size). `--compare`
+adds other lists (TXT, or an h5ad's genes). Outputs hold gene names only.
 
-**Options:**
-- `--layer <name>` - Use specified layer for processing (default: use X)
-- `--raw` - Use raw data instead of processed
-- `--n-genes <int>` - Number of highly variable genes (default: 2000)
-- `--k-neighbors <int>` - Number of neighbors for KNN graph (default: 30)
-- `--individual-pca` - Compute PCA separately for each individual
-- `--import-genes <file>` - Path to gene list file (.txt or .h5ad) to use instead of HVG selection
-
-**Examples:**
+### `pipeline mathys2023-for-adprs`
 ```bash
-# Basic usage with defaults (2000 HVGs, 30 neighbors)
-python -m rosmap_processing pipeline scanpy \
-    data/raw/ROSMAP_MIT/combined.h5ad \
-    data/processed/rosmap_processed.h5ad
-
-# With specific parameters
-python -m rosmap_processing pipeline scanpy \
-    data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad \
-    data/seaAD/PFC/RNAseq/seaad_2k_k30.h5ad \
-    --layer UMIs --n-genes 2000 --k-neighbors 30
-
-# Using imported gene list
-python -m rosmap_processing pipeline scanpy \
-    data/raw/ROSMAP_MIT/combined.h5ad \
-    data/processed/rosmap_mathys_genes.h5ad \
-    --n-genes 1000 --k-neighbors 30 \
-    --import-genes data/mathys2019_DEGs_genes.txt
+python -m rosmap_processing pipeline mathys2023-for-adprs \
+    [--input-dir data/v2/counts/ROSMAP_MIT] [--output-dir data/v2/processed/mathys2023_for_adprs] \
+    [--gene-map data/v2/reference/rosmap_mit_gene_map.tsv] [--clinical-csv ...] [--mit-metadata-csv ...]
 ```
+Per-(donor, cell type, gene) mean log-normalized expression and fraction
+expressed, for the ad-prs project. Fails if any input does not hold raw counts.
+See the README it writes into the output directory.
 
----
+## utils
 
-### Utils Commands
-Utility functions for inspection and validation.
-
-#### Validate/Inspect File
+### `utils check-counts`
 ```bash
-python -m rosmap_processing utils validate <input.h5ad>
+python -m rosmap_processing utils check-counts <a.h5ad> ... [--key X|raw/X|layers/<name>]
 ```
-Validates h5ad file and prints detailed information about its contents.
+Reads the stored matrix in chunks and reports only aggregate statistics (shape,
+dtype, number of non-integer and negative values, min, max). Exits non-zero if
+any file does not hold raw counts. Safe for restricted data.
 
-**Example:**
+### `utils validate`
 ```bash
-python -m rosmap_processing utils validate data/raw/ROSMAP/combined.h5ad
+python -m rosmap_processing utils validate <file.h5ad>
 ```
-
----
-
-## Full Pipeline Example
-
-Here's how to run the complete processing pipeline:
-
-```bash
-# 1. Download data
-python -m rosmap_processing data download
-
-# 2. Fix categories and remove raw data
-python -m rosmap_processing data category-fix data/raw/ROSMAP_MIT/Astrocytes.h5ad \
-    --columns cell_type_high_resolution --remove-raw
-
-# 3. Combine files
-python -m rosmap_processing core combine \
-    data/raw/ROSMAP_MIT/Astrocytes.h5ad \
-    data/raw/ROSMAP_MIT/Immune_cells.h5ad \
-    --output data/raw/ROSMAP_MIT/combined.h5ad
-
-# 4. Add metadata
-python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/combined.h5ad \
-    data/raw/ROSMAP/rosmap_clinical.csv --mit
-
-# 5. Convert column format
-python -m rosmap_processing core column-mapping data/raw/ROSMAP_MIT/combined.h5ad \
-    --data-type ROSMAP_MIT --cellclass Mixed --subclass Mixed --inplace
-
-# 6. Run scanpy pipeline
-python -m rosmap_processing pipeline scanpy \
-    data/raw/ROSMAP_MIT/combined.h5ad \
-    data/processed/rosmap_processed.h5ad \
-    --n-genes 2000 --k-neighbors 30
-
-# 7. Validate output
-python -m rosmap_processing utils validate data/processed/rosmap_processed.h5ad
-```
-
----
-
-## Help
-
-Get help for any command:
-```bash
-# Main help
-python -m rosmap_processing --help
-
-# Command-specific help
-python -m rosmap_processing data --help
-python -m rosmap_processing core --help
-python -m rosmap_processing pipeline --help
-python -m rosmap_processing utils --help
-
-# Subcommand-specific help
-python -m rosmap_processing data category-fix --help
-python -m rosmap_processing pipeline scanpy --help
-```
-
----
-
-## Verbose Logging
-
-Add `-v` or `--verbose` flag for detailed debug logging:
-```bash
-python -m rosmap_processing -v pipeline scanpy input.h5ad output.h5ad
-```
-
----
-
-## SLURM Usage
-
-The scripts in `slurm/` are already configured to use the new CLI interface. Submit jobs with:
-
-```bash
-# Full pipeline
-sbatch slurm/run_all.sh
-
-# SeaAD pipeline
-sbatch slurm/run_all_seaad.sh
-
-# Specific processing with Mathys genes
-sbatch slurm/rosmap_mathys_genes.sh
-
-# Top 1k genes
-sbatch slurm/rosmap_top1k_genes.sh
-
-# SeaAD with ROSMAP genes
-sbatch slurm/seaad_rosmap_genes.sh
-```
-
-All SLURM scripts now use the unified CLI interface internally.
+Prints structure, obs value counts and a 20×20 preview of X. **The preview shows
+data values: do not use it on restricted data where logs are shared.**

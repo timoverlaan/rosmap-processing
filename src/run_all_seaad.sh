@@ -1,57 +1,44 @@
-#!/bin/bash
-# This script downloads the SeaAD dataset from the Amazon S3 bucket and prepares it for analysis.
+#!/bin/sh
+# SeaAD (PFC) setup: download from the public S3 bucket, then add
+# ROSMAP-style columns (braaksc, ceradsc, thalsc, Wang labels) into a copy in
+# data/v2/counts/SeaAD/. The download itself is never modified. The counts are
+# in the 'UMIs' layer; the processing itself is done by the slurm/*hvg*.sh jobs.
+# Runs inside the container (submit slurm/run_all_seaad.sh).
 
-# Exit on any error
-set -e
+set -eu
+
+V2=data/v2
+SRC_DIR=data/seaAD/PFC/RNAseq
+H5AD=SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad
+META=SEAAD_A9_RNAseq_final-nuclei_metadata.2024-02-13.csv
 
 echo "========================================="
-echo "SeaAD Processing Pipeline"
+echo "SeaAD Processing Pipeline (v2)"
 echo "========================================="
-echo ""
 
-# Set up run directories and save config/git info
-echo "Setting up run directories..."
 RUN_INFO=$(pixi run python src/setup_run.py --config config.yaml --run-name seaad_processing)
 eval "$RUN_INFO"
-echo "Output directory: ${OUTPUT_DIR}"
-echo "Log directory: ${LOG_DIR}"
-echo ""
+echo "Run directory: ${OUTPUT_DIR}"
 
-# Data folder (if it doesn't exist yet)
-mkdir -p data/seaAD/PFC/RNAseq
+mkdir -p "$SRC_DIR" "$V2/counts/SeaAD"
 
-# Download SeaAD from the amazon s3 bucket
-echo "[Step 1/3] Downloading SeaAD data from S3..."
-pixi run aws s3 cp --no-sign-request \
-    s3://sea-ad-single-cell-profiling/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad \
-    data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad
+echo "[Step 1/2] Downloading SeaAD data from S3 (skips existing files)..."
+for f in "$H5AD" "$META"; do
+    if [ -e "$SRC_DIR/$f" ]; then
+        echo "exists, skipping: $SRC_DIR/$f"
+    else
+        pixi run aws s3 cp --no-sign-request "s3://sea-ad-single-cell-profiling/PFC/RNAseq/$f" "$SRC_DIR/$f"
+    fi
+done
 
-# Download the metadata file
-pixi run aws s3 cp --no-sign-request \
-    s3://sea-ad-single-cell-profiling/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei_metadata.2024-02-13.csv \
-    data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei_metadata.2024-02-13.csv
-echo "✓ Download complete"
-echo ""
-
-# Check the file (print a bunch of stuff)
-# pixi run python -m rosmap_processing utils validate \
-#     data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad
-
-echo "[Step 2/3] Converting column format..."
-pixi run python -m rosmap_processing core column-mapping \
-    data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad --inplace --data-type SeaAD
-echo "✓ Column format conversion complete"
-echo ""
-
-echo "[Step 3/3] Running scanpy pipeline..."
-pixi run python -m rosmap_processing pipeline scanpy \
-    data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad \
-    ${OUTPUT_DIR}/SeaAD_2k_k30.h5ad \
-    --layer UMIs --n-genes 2000 --k-neighbors 30
-echo "✓ Scanpy pipeline complete"
-echo ""
+echo "[Step 2/2] Adding ROSMAP-style columns and Wang labels (copy in $V2/counts/SeaAD)..."
+if [ -e "$V2/counts/SeaAD/$H5AD" ]; then
+    echo "exists, skipping: $V2/counts/SeaAD/$H5AD"
+else
+    pixi run python -m rosmap_processing core column-mapping "$SRC_DIR/$H5AD" \
+        --data-type SeaAD --output "$V2/counts/SeaAD/$H5AD"
+fi
 
 echo "========================================="
-echo "Pipeline complete!"
+echo "Done. SeaAD counts (layer 'UMIs'): $V2/counts/SeaAD/$H5AD"
 echo "========================================="
-echo "Output saved to: ${OUTPUT_DIR}/SeaAD_2k_k30.h5ad"

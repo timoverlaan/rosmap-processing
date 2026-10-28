@@ -13,24 +13,10 @@ from typing import List, Optional
 import numpy as np
 import anndata as ad
 
+from ..utils.counts import is_integer_counts, to_int32_counts
 from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-def _is_integer_counts(adata: ad.AnnData, sample_cells: int = 500, sample_genes: int = 200) -> bool:
-    """Return True if X appears to contain integer counts stored as floats (>99% whole numbers)."""
-    n_cells = min(sample_cells, adata.shape[0])
-    n_genes = min(sample_genes, adata.shape[1])
-    sample = adata.X[:n_cells, :n_genes]
-    if hasattr(sample, 'toarray'):
-        sample = sample.toarray()
-    else:
-        sample = np.array(sample)
-    nonzero = sample[sample > 0].flatten()
-    if len(nonzero) == 0:
-        return False
-    return (np.sum(nonzero == np.floor(nonzero)) / len(nonzero)) > 0.99
 
 
 def fix_categories(
@@ -82,19 +68,25 @@ def fix_categories(
     if missing_columns:
         logger.info(f"Skipped {len(missing_columns)} missing columns: {missing_columns}")
     
+    x_is_counts = is_integer_counts(adata.X)
+
     # Cast float-stored integer counts to int32
     if cast_counts_to_int and np.issubdtype(adata.X.dtype, np.floating):
-        if _is_integer_counts(adata):
+        if x_is_counts:
             logger.info(f"X dtype is {adata.X.dtype} but contains integer counts — casting to int32")
-            if hasattr(adata.X, 'data'):
-                adata.X.data = adata.X.data.astype(np.int32)
-            else:
-                adata.X = adata.X.astype(np.int32)
+            adata.X = to_int32_counts(adata.X)
         else:
             logger.info(f"X dtype is {adata.X.dtype} with non-integer values — skipping cast")
 
-    # Remove raw data if requested
+    # Remove raw data if requested. SeuratDisk puts Seurat's `data` slot in X
+    # and the counts in .raw, so dropping .raw while X is normalized would
+    # throw the counts away (this happened in the April 2026 run).
     if remove_raw and adata.raw is not None:
+        if not x_is_counts:
+            raise ValueError(
+                "Refusing to remove .raw: X does not hold raw counts, so .raw is the "
+                "only copy of them. Use `data prepare` to move the counts into X first."
+            )
         logger.info("Removing raw data layer...")
         del adata.raw
         logger.debug("Raw data removed")

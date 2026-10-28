@@ -1,203 +1,85 @@
+#!/bin/sh
+# ROSMAP + ROSMAP-MIT pipeline: Synapse download -> raw-count h5ad files.
+# Runs inside the container (submit slurm/run_all.sh).
+#
+# Inputs (all pinned to Synapse versions and checked by MD5, see SYNAPSE_FILES):
+#   data/v2/download/ROSMAP/   Green 2024 objects + ROSMAP metadata, downloaded fresh
+#                              (the copies in data/raw/ROSMAP were rewritten in 2025)
+#   data/raw/ROSMAP_MIT/       Mathys 2023 RDS + metadata, verified in place; the
+#                              .h5Seurat files made from the RDS are written here too
+#                              (set MIT_RAW to use another directory)
+# Outputs in data/v2/:
+#   data/v2/converted/<DATASET>/<class>.h5ad  SeuratDisk output (X = Seurat 'data', raw = counts)
+#   data/v2/counts/<DATASET>/<class>.h5ad     raw counts in X (int32), clinical metadata in obs
+#   data/v2/counts/<DATASET>/combined.h5ad    all classes of a dataset
+# Steps skip outputs that already exist, so a failed run can be resubmitted.
 
-peline for processing ROSMAP and ROSMAP-MIT data
-# Uses unified CLI interface and config system
+set -eu
 
-# Exit on any error
-set -e
+V2=data/v2
+GREEN=$V2/download/ROSMAP
+MIT=${MIT_RAW:-data/raw/ROSMAP_MIT}
+CLINICAL=$GREEN/ROSMAP_clinical.csv
+MIT_CLASSES="Astrocytes Excitatory_neurons_set1 Excitatory_neurons_set2 Excitatory_neurons_set3 Immune_cells Inhibitory_neurons OPCs Oligodendrocytes"
+ROSMAP_CLASSES="astrocytes cux2+ cux2- inhibitory microglia oligodendroglia vascular.niche"
+
+rp() { pixi run python -m rosmap_processing "$@"; }
 
 echo "========================================="
-echo "ROSMAP Processing Pipeline"
+echo "ROSMAP Processing Pipeline (v2)"
 echo "========================================="
-echo ""
 
-# Set up run directories and save config/git info
-echo "Setting up run directories..."
+# Record config and git info for this run
 RUN_INFO=$(pixi run python src/setup_run.py --config config.yaml --run-name rosmap_processing)
 eval "$RUN_INFO"
-echo "Output directory: ${OUTPUT_DIR}"
-echo "Log directory: ${LOG_DIR}"
-echo ""
+echo "Run directory: ${OUTPUT_DIR}"
 
-# First download all the data (both ROSMAP and ROSMAP_MIT)
-echo "[Step 1/8] Downloading ROSMAP data from Synapse..."
-pixi run python -m rosmap_processing data download
-echo "✓ Download complete"
-echo ""
+echo "[Step 1/5] Downloading / verifying pinned Synapse files..."
+# Green objects + ROSMAP metadata into $GREEN (present files are MD5-checked, not re-downloaded)
+rp data download --dataset rosmap --output-dir $V2/download
+# Mathys 2023 files: checked in place; fails with a list of mismatches if any differ
+rp data verify --dataset rosmap-mit --dir "$MIT"
 
-# Then list all the files
-echo "[Step 2/8] Listing downloaded files..."
-echo "Files in data/raw/ROSMAP and data/raw/ROSMAP_MIT:"
-ls data/raw/ROSMAP/
-ls data/raw/ROSMAP_MIT/
-echo ""
+echo "[Step 2/5] Converting ROSMAP-MIT RDS files to h5Seurat (skips existing)..."
+RDS=""
+for c in $MIT_CLASSES; do RDS="$RDS $MIT/$c.rds"; done
+# shellcheck disable=SC2086
+pixi run Rscript src/convert_R/rds_to_h5Seurat.R $RDS
 
-# The MIT data is in rds format. We first convert to h5Seurat files, then to h5ad. 
-# The other ROSMAP data can be converted from h5Seurat to h5ad directly.
-echo "[Step 3/8] Converting RDS files to h5Seurat format..."
-pixi run Rscript src/convert_R/rds_to_h5Seurat.R \
-    data/raw/ROSMAP_MIT/Astrocytes.rds \
-    data/raw/ROSMAP_MIT/Excitatory_neurons_set1.rds \
-    data/raw/ROSMAP_MIT/Excitatory_neurons_set2.rds \
-    data/raw/ROSMAP_MIT/Excitatory_neurons_set3.rds \
-    data/raw/ROSMAP_MIT/Immune_cells.rds \
-    data/raw/ROSMAP_MIT/Inhibitory_neurons.rds \
-    data/raw/ROSMAP_MIT/OPCs.rds \
-    data/raw/ROSMAP_MIT/Oligodendrocytes.rds
-echo "✓ RDS to h5Seurat conversion complete"
-echo ""
+echo "[Step 3/5] Converting h5Seurat files to h5ad (into $V2/converted)..."
+H5S=""
+for c in $MIT_CLASSES; do H5S="$H5S $MIT/$c.h5Seurat"; done
+# shellcheck disable=SC2086
+pixi run Rscript src/convert_R/h5Seurat_to_h5ad.R --outdir=$V2/converted/ROSMAP_MIT $H5S
+H5S=""
+for c in $ROSMAP_CLASSES; do H5S="$H5S $GREEN/$c.h5Seurat"; done
+# shellcheck disable=SC2086
+pixi run Rscript src/convert_R/h5Seurat_to_h5ad.R --outdir=$V2/converted/ROSMAP $H5S
 
-# Next, we can convert all the h5Seurat files to h5ad files.
-echo "[Step 4/8] Converting h5Seurat files to h5ad format..."
-echo "  - Converting MIT data..."
-pixi run Rscript src/convert_R/h5Seurat_to_h5ad.R \
-    data/raw/ROSMAP_MIT/Astrocytes.h5Seurat \
-    data/raw/ROSMAP_MIT/Excitatory_neurons_set1.h5Seurat \
-    data/raw/ROSMAP_MIT/Excitatory_neurons_set2.h5Seurat \
-    data/raw/ROSMAP_MIT/Excitatory_neurons_set3.h5Seurat \
-    data/raw/ROSMAP_MIT/Immune_cells.h5Seurat \
-    data/raw/ROSMAP_MIT/Inhibitory_neurons.h5Seurat \
-    data/raw/ROSMAP_MIT/OPCs.h5Seurat \
-    data/raw/ROSMAP_MIT/Oligodendrocytes.h5Seurat
+echo "[Step 4/5] Raw counts into X, checked over the whole matrix, plus clinical metadata..."
+for c in $MIT_CLASSES; do
+    out=$V2/counts/ROSMAP_MIT/$c.h5ad
+    if [ -e "$out" ]; then echo "exists, skipping: $out"; continue; fi
+    rp data prepare $V2/converted/ROSMAP_MIT/$c.h5ad --output "$out" \
+        --columns cell_type_high_resolution --metadata $CLINICAL
+done
+for c in $ROSMAP_CLASSES; do
+    out=$V2/counts/ROSMAP/$c.h5ad
+    if [ -e "$out" ]; then echo "exists, skipping: $out"; continue; fi
+    rp data prepare "$V2/converted/ROSMAP/$c.h5ad" --output "$out" --columns --metadata $CLINICAL
+done
 
-# And also do this for the other ROSMAP data
-echo "  - Converting ROSMAP data..."
-pixi run Rscript src/convert_R/h5Seurat_to_h5ad.R \
-    data/raw/ROSMAP/astrocytes.h5Seurat \
-    data/raw/ROSMAP/cux2+.h5Seurat \
-    data/raw/ROSMAP/cux2-.h5Seurat \
-    data/raw/ROSMAP/inhibitory.h5Seurat \
-    data/raw/ROSMAP/microglia.h5Seurat \
-    data/raw/ROSMAP/oligodendroglia.h5Seurat \
-    data/raw/ROSMAP/vascular.niche.h5Seurat
-echo "✓ h5Seurat to h5ad conversion complete"
-echo ""
-
-# Run fix_categories on all the h5ad files, this turns the cell_type column into categorical
-# and removes the raw data layer
-echo "[Step 5/8] Fixing categorical columns and removing raw data..."
-echo "  - Processing MIT files..."
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP_MIT/Astrocytes.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP_MIT/Excitatory_neurons_set1.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP_MIT/Excitatory_neurons_set2.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP_MIT/Excitatory_neurons_set3.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP_MIT/Immune_cells.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP_MIT/Inhibitory_neurons.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP_MIT/OPCs.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP_MIT/Oligodendrocytes.h5ad --columns cell_type_high_resolution --remove-raw
-
-echo "  - Processing ROSMAP files..."
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP/astrocytes.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP/cux2+.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP/cux2-.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP/inhibitory.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP/microglia.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP/oligodendroglia.h5ad --columns cell_type_high_resolution --remove-raw
-pixi run python -m rosmap_processing data category-fix data/raw/ROSMAP/vascular.niche.h5ad --columns cell_type_high_resolution --remove-raw
-echo "✓ Category fixing complete"
-echo ""
-
-# Combine individual h5ad files into two big files, one for ROSMAP and one for ROSMAP_MIT
-
-# Combine ROSMAP_MIT files
-echo "[Step 6/8] Combining h5ad files..."
-echo "  - Combining MIT files..."
-pixi run python -m rosmap_processing core combine \
-    data/raw/ROSMAP_MIT/Astrocytes.h5ad \
-    data/raw/ROSMAP_MIT/Excitatory_neurons_set1.h5ad \
-    data/raw/ROSMAP_MIT/Excitatory_neurons_set2.h5ad \
-    data/raw/ROSMAP_MIT/Excitatory_neurons_set3.h5ad \
-    data/raw/ROSMAP_MIT/Immune_cells.h5ad \
-    data/raw/ROSMAP_MIT/Inhibitory_neurons.h5ad \
-    data/raw/ROSMAP_MIT/OPCs.h5ad \
-    data/raw/ROSMAP_MIT/Oligodendrocytes.h5ad \
-    --output data/raw/ROSMAP_MIT/combined.h5ad
-
-pixi run python -m rosmap_processing utils validate data/raw/ROSMAP_MIT/combined.h5ad
-
-# Combine ROSMAP files
-echo "  - Combining ROSMAP files..."
-pixi run python -m rosmap_processing core combine \
-    data/raw/ROSMAP/astrocytes.h5ad \
-    data/raw/ROSMAP/cux2+.h5ad \
-    data/raw/ROSMAP/cux2-.h5ad \
-    data/raw/ROSMAP/inhibitory.h5ad \
-    data/raw/ROSMAP/microglia.h5ad \
-    data/raw/ROSMAP/oligodendroglia.h5ad \
-    data/raw/ROSMAP/vascular.niche.h5ad \
-    --output data/raw/ROSMAP/combined.h5ad
-
-pixi run python -m rosmap_processing utils validate data/raw/ROSMAP/combined.h5ad
-echo "✓ Combining complete"
-echo ""
-
-# Add metadata to all h5ad files using ROSMAP_clinical.csv
-
-# MIT files
-echo "[Step 7/8] Adding metadata to h5ad files..."
-echo "  - Adding metadata to MIT files..."
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Astrocytes.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Excitatory_neurons_set1.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Excitatory_neurons_set2.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Excitatory_neurons_set3.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Immune_cells.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Inhibitory_neurons.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/OPCs.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/Oligodendrocytes.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
-
-# ROSMAP files
-echo "  - Adding metadata to ROSMAP files..."
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/astrocytes.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/cux2+.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/cux2-.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/inhibitory.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/microglia.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/oligodendroglia.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/vascular.niche.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
-
-# Combined files
-echo "  - Adding metadata to combined files..."
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP/combined.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv
-pixi run python -m rosmap_processing data metadata data/raw/ROSMAP_MIT/combined.h5ad data/raw/ROSMAP/ROSMAP_clinical.csv --mit
-
-# Validate combined files
-pixi run python -m rosmap_processing utils validate data/raw/ROSMAP/combined.h5ad
-pixi run python -m rosmap_processing utils validate data/raw/ROSMAP_MIT/combined.h5ad
-echo "✓ Metadata addition complete"
-echo ""
-
-# Convert column names to standard format (consistent between SeaAD and ROSMAP)
-
-# MIT files with cell class/subclass
-echo "[Step 8/8] Converting column formats..."
-echo "  - Converting MIT files..."
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP_MIT/Astrocytes.h5ad --data-type ROSMAP_MIT --cellclass Glia --subclass Astrocytes --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP_MIT/Excitatory_neurons_set1.h5ad --data-type ROSMAP_MIT --cellclass Neuron --subclass Excitatory --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP_MIT/Excitatory_neurons_set2.h5ad --data-type ROSMAP_MIT --cellclass Neuron --subclass Excitatory --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP_MIT/Excitatory_neurons_set3.h5ad --data-type ROSMAP_MIT --cellclass Neuron --subclass Excitatory --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP_MIT/Immune_cells.h5ad --data-type ROSMAP_MIT --cellclass Glia --subclass Immune --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP_MIT/Inhibitory_neurons.h5ad --data-type ROSMAP_MIT --cellclass Neuron --subclass Inhibitory --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP_MIT/OPCs.h5ad --data-type ROSMAP_MIT --cellclass Glia --subclass OPCs --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP_MIT/Oligodendrocytes.h5ad --data-type ROSMAP_MIT --cellclass Glia --subclass Oligodendrocytes --inplace
-
-# ROSMAP files
-echo "  - Converting ROSMAP files..."
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP/astrocytes.h5ad --data-type ROSMAP --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP/cux2+.h5ad --data-type ROSMAP --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP/cux2-.h5ad --data-type ROSMAP --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP/inhibitory.h5ad --data-type ROSMAP --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP/microglia.h5ad --data-type ROSMAP --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP/oligodendroglia.h5ad --data-type ROSMAP --inplace
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP/vascular.niche.h5ad --data-type ROSMAP --inplace
-
-# Combined ROSMAP file
-pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP/combined.h5ad --data-type ROSMAP --inplace
-echo "✓ Column format conversion complete"
-echo ""
+echo "[Step 5/5] Combining per-class files..."
+for ds in ROSMAP_MIT ROSMAP; do
+    if [ "$ds" = ROSMAP_MIT ]; then classes=$MIT_CLASSES; else classes=$ROSMAP_CLASSES; fi
+    out=$V2/counts/$ds/combined.h5ad
+    if [ -e "$out" ]; then echo "exists, skipping: $out"; continue; fi
+    inputs=""
+    for c in $classes; do inputs="$inputs $V2/counts/$ds/$c.h5ad"; done
+    # shellcheck disable=SC2086
+    rp core combine $inputs --output "$out"
+done
 
 echo "========================================="
-echo "Pipeline complete!"
+echo "Pipeline complete. Counts in $V2/counts/"
 echo "========================================="
-
-# Note: ROSMAP_MIT combined file already has Class/Celltype from individual files
-# If you need to process it, use:
-# pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP_MIT/combined.h5ad --data-type ROSMAP_MIT --cellclass Mixed --subclass Mixed --inplace# pixi run python -m rosmap_processing core column-mapping data/raw/ROSMAP_MIT/combined.h5ad --data-type ROSMAP_MIT --cellclass Mixed --subclass Mixed --inplace

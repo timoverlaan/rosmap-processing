@@ -1,4 +1,4 @@
-# Version: 0.1.1
+# Version: see pixi.toml (container_pixi_<version>.sif, built by build_and_upload.sh)
 
 # Header
 Bootstrap: docker

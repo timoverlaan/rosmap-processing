@@ -1,7 +1,11 @@
 #!/bin/bash
-#SBATCH --account=ewi-insy-prb
-#SBATCH --partition=insy,general
-#SBATCH --qos=long
+# Aggregate the Mathys 2023 per-class count files -> per-(donor, cell_type,
+# gene) parquet for the ad-prs project, with Ensembl gene IDs.
+# Needs data/v2/counts/ROSMAP_MIT (slurm/run_all.sh) and
+# data/v2/reference/rosmap_mit_gene_map.tsv (slurm/gene_maps.sh).
+# Submit from the repo root: sbatch slurm/mathys2023_for_adprs.sh
+#SBATCH --account=daic-eemcs-insy-prb
+#SBATCH --partition=all
 #SBATCH --time=12:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -9,25 +13,14 @@
 #SBATCH --mail-type=END
 #SBATCH --output=slurm/out/%j_mathys2023_for_adprs.out
 #SBATCH --error=slurm/out/%j_mathys2023_for_adprs.out
-/usr/bin/scontrol show job -d "$SLURM_JOB_ID"
 
-# Aggregate Mathys 2023 per-class h5ads -> per-(donor, cell_type, gene) parquet
-# for the ad-prs project. Inputs:
-#   data/raw/ROSMAP_MIT/{Astrocytes,Excitatory_neurons_set{1,2,3},
-#                       Inhibitory_neurons,Immune_cells,Oligodendrocytes,OPCs}.h5ad
-#   data/raw/ROSMAP/rosmap_clinical.csv
-# Each per-class h5ad needs `projid` and `cell_type_high_resolution` in obs and
-# raw counts in X. That's the output of run_all.sh steps 1-4 (download +
-# RDS->h5Seurat->h5ad); the later category-fix / metadata / combine /
-# column-mapping steps are NOT required by this script. If the per-class h5ads
-# don't exist yet, run those steps first (e.g. `sbatch slurm/run_all.sh`).
+source slurm/common.sh
 
-apptainer exec --writable-tmpfs --pwd /opt/app --containall \
-    --bind src/:/opt/app/src/ \
-    --bind data/:/opt/app/data/ \
-    --env PYTHONPATH=/opt/app/src \
-    ./container_pixi_0-2-1.sif pixi run python -m rosmap_processing pipeline mathys2023-for-adprs \
-        --input-dir data/raw/ROSMAP_MIT \
-        --output-dir data/processed/mathys2023_for_adprs \
-        --clinical-csv data/raw/ROSMAP/ROSMAP_clinical.csv \
+ADPRS_OUT="$OUT/mathys2023_for_adprs"
+skip_if_exists "$ADPRS_OUT/README.md" \
+    rp pipeline mathys2023-for-adprs \
+        --input-dir "$V2/counts/ROSMAP_MIT" \
+        --output-dir "$ADPRS_OUT" \
+        --gene-map "$REF/rosmap_mit_gene_map.tsv" \
+        --clinical-csv data/v2/download/ROSMAP/ROSMAP_clinical.csv \
         --mit-metadata-csv data/raw/ROSMAP_MIT/MIT_ROSMAP_Multiomics_individual_metadata.csv

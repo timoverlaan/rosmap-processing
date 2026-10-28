@@ -3,7 +3,6 @@
 import os
 import yaml
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
 from dataclasses import dataclass, field
@@ -23,7 +22,7 @@ class ProcessingConfig:
     n_hvgs: int = 2000
     k_neighbors: int = 30
     n_pca_components: int = 50
-    target_sum: float = 1e6
+    target_sum: float = 1e4
     log_transform: bool = True
     individual_pca: bool = False
 
@@ -335,55 +334,27 @@ class Config:
         output_dir : Path
             Directory to save git information
         """
+        from .provenance import get_git_info
+
         git_info_file = output_dir / "git_info.txt"
-        
-        try:
-            # Get git commit hash
-            commit_hash = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                capture_output=True,
-                text=True,
-                check=True
-            ).stdout.strip()
-            
-            # Get git branch
-            branch = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                capture_output=True,
-                text=True,
-                check=True
-            ).stdout.strip()
-            
-            # Get git status (check for uncommitted changes)
-            status = subprocess.run(
-                ["git", "status", "--porcelain"],
-                capture_output=True,
-                text=True,
-                check=True
-            ).stdout.strip()
-            
-            # Write to file
-            with open(git_info_file, "w") as f:
-                f.write(f"Git Commit Hash: {commit_hash}\n")
-                f.write(f"Branch: {branch}\n")
-                f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-                f.write("\n")
-                
-                if status:
-                    f.write("WARNING: Uncommitted changes detected:\n")
-                    f.write(status)
-                    f.write("\n")
-                    logger.warning("Git repository has uncommitted changes!")
-                else:
-                    f.write("Repository is clean (no uncommitted changes)\n")
-            
-            logger.info(f"Git info saved to {git_info_file}")
-            logger.info(f"Commit: {commit_hash[:8]} on branch '{branch}'")
-            
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            logger.warning(f"Could not save git info: {e}")
-            with open(git_info_file, "w") as f:
-                f.write(f"Git information not available: {e}\n")
+        git = get_git_info()
+
+        with open(git_info_file, "w") as f:
+            f.write(f"Git Commit Hash: {git['commit']}\n")
+            f.write(f"Branch: {git['branch']}\n")
+            f.write(f"Source: {git['source']}\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            f.write("\n")
+            if git["uncommitted_changes"] > 0:
+                f.write(f"WARNING: {git['uncommitted_changes']} uncommitted change(s)\n")
+                logger.warning("Git repository has uncommitted changes!")
+            elif git["uncommitted_changes"] == 0:
+                f.write("Repository is clean (no uncommitted changes)\n")
+
+        if git["source"] == "unavailable":
+            logger.warning("Could not determine the git commit (no git, no GIT_COMMIT)")
+        logger.info(f"Git info saved to {git_info_file}")
+        logger.info(f"Commit: {git['commit'][:8]} on branch '{git['branch']}'")
 
 
 def load_config(config_path: Optional[Path] = None) -> Config:
