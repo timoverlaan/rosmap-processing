@@ -5,6 +5,8 @@ from typing import NamedTuple
 # Processing thresholds
 MIN_GENES_PER_CELL = 200
 MIN_CELLS_PER_GENE = 5
+# Donors with fewer cells are dropped: too few for a per-donor HVG fit or kNN graph
+MIN_CELLS_PER_DONOR = 50
 DEFAULT_HVG_COUNT = 2000
 DEFAULT_K_NEIGHBORS = 30
 DEFAULT_PCA_COMPONENTS = 50

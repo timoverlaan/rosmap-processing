@@ -8,8 +8,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from rosmap_processing.utils.constants import (
-    DEFAULT_PCA_COMPONENTS, DONOR_ID_COLUMN, MIN_CELLS_PER_GENE, MIN_GENES_PER_CELL,
-    NORMALIZE_TARGET_SUM,
+    DEFAULT_PCA_COMPONENTS, DONOR_ID_COLUMN, MIN_CELLS_PER_DONOR, MIN_CELLS_PER_GENE,
+    MIN_GENES_PER_CELL, NORMALIZE_TARGET_SUM,
 )
 from rosmap_processing.utils.logging import setup_logging, get_logger
 
@@ -158,6 +158,8 @@ def main():
                                help="TXT list (symbols or Ensembl IDs) all gene choices are made within, e.g. from `genes shared`")
     scanpy_parser.add_argument("--donor-column", type=str, default=None,
                                help=f"obs column holding the donor (default: '{DONOR_ID_COLUMN}', else 'projid'); cells without one are dropped")
+    scanpy_parser.add_argument("--min-cells-per-donor", type=int, default=MIN_CELLS_PER_DONOR,
+                               help=f"Drop donors with fewer cells, after cell filtering (default: {MIN_CELLS_PER_DONOR})")
     scanpy_parser.add_argument("--allow-missing-genes", action="store_true",
                                help="With a reference .h5ad, zero-fill its genes that are missing here instead of failing")
     scanpy_parser.add_argument("--n-pcs", type=int, default=DEFAULT_PCA_COMPONENTS,
@@ -190,6 +192,7 @@ def main():
                                 help="Extra gene lists to include: TXT, or an h5ad (its genes)")
     compare_parser.add_argument("--min-genes", type=int, default=MIN_GENES_PER_CELL)
     compare_parser.add_argument("--min-cells", type=int, default=MIN_CELLS_PER_GENE)
+    compare_parser.add_argument("--min-cells-per-donor", type=int, default=MIN_CELLS_PER_DONOR)
     compare_parser.add_argument("--target-sum", type=float, default=NORMALIZE_TARGET_SUM)
 
     # pipeline mathys2023-for-adprs
@@ -388,6 +391,7 @@ def handle_pipeline_command(args):
             allow_missing_genes=args.allow_missing_genes,
             min_genes=args.min_genes,
             min_cells=args.min_cells,
+            min_cells_per_donor=args.min_cells_per_donor,
             n_pca_components=args.n_pcs,
             target_sum=args.target_sum,
             overwrite=args.overwrite,
@@ -414,6 +418,7 @@ def handle_pipeline_command(args):
             extra_lists=extra,
             min_genes=args.min_genes,
             min_cells=args.min_cells,
+            min_cells_per_donor=args.min_cells_per_donor,
             target_sum=args.target_sum,
         )
 

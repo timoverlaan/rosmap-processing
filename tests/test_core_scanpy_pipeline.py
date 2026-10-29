@@ -32,7 +32,7 @@ def _gene_map(path, names, ids):
     pd.DataFrame({"var_name": names, "gene_id": ids}).to_csv(path, sep="\t", index=False)
 
 
-COMMON = dict(k_neighbors=5, n_pca_components=2, min_genes=1)
+COMMON = dict(k_neighbors=5, n_pca_components=2, min_genes=1, min_cells_per_donor=10)
 
 
 def test_normalization_uses_totals_over_all_genes(tmp_path):
@@ -169,7 +169,9 @@ def test_donor_column_and_cells_without_donor(tmp_path):
     adata.obs = adata.obs.drop(columns=["Donor ID"])
     donors = np.repeat(["R1", "R2", "R3"], CELLS_PER_DONOR).astype(object)
     donors[:5] = None  # e.g. cells whose donor could not be identified
-    adata.obs["individualID"] = donors
+    donors[5:8] = "NA"  # R's NA written out as text
+    donors[8:11] = "R9"  # a donor with fewer than min_cells_per_donor cells
+    adata.obs["individualID"] = pd.Categorical(donors)
     src = tmp_path / "in.h5ad"
     adata.write_h5ad(src)
     genes = tmp_path / "genes.txt"
@@ -178,8 +180,15 @@ def test_donor_column_and_cells_without_donor(tmp_path):
     out = tmp_path / "out.h5ad"
     process_h5ad(src, out, import_genes=genes, donor_column="individualID", **COMMON)
     res = ad.read_h5ad(out)
-    assert res.n_obs == adata.n_obs - 5
+    assert res.n_obs == adata.n_obs - 11
     assert set(res.obs["Donor ID"].astype(str)) == {"R1", "R2", "R3"}
+
+
+def test_rejects_min_cells_per_donor_below_two(tmp_path):
+    src = tmp_path / "in.h5ad"
+    _dataset().write_h5ad(src)
+    with pytest.raises(ValueError, match="min_cells_per_donor"):
+        process_h5ad(src, tmp_path / "out.h5ad", **{**COMMON, "min_cells_per_donor": 1})
 
 
 def test_refuses_to_overwrite(tmp_path):

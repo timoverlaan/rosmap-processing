@@ -2,7 +2,8 @@
 
 1. Load and take raw counts (X, a layer, or .raw); the whole matrix must hold
    integer counts.
-2. Filter cells (min genes) and, unless a gene list is imported, genes (min cells).
+2. Filter cells (min genes), then cells without a donor and donors with too
+   few cells, then, unless a gene list is imported, genes (min cells).
 3. Per-cell total counts over all remaining genes. These are the size factors
    for normalization, so the result does not depend on which genes are kept.
 4. Optionally attach Ensembl IDs from a gene map (see `data/genes.py`).
@@ -29,6 +30,7 @@ from tqdm import tqdm
 from rosmap_processing.utils.constants import (
     MIN_GENES_PER_CELL,
     MIN_CELLS_PER_GENE,
+    MIN_CELLS_PER_DONOR,
     DEFAULT_HVG_COUNT,
     DEFAULT_K_NEIGHBORS,
     DEFAULT_PCA_COMPONENTS,
@@ -47,6 +49,10 @@ from rosmap_processing.utils.logging import get_logger
 from rosmap_processing.utils.provenance import provenance_record
 
 logger = get_logger(__name__)
+
+# Donor IDs that mean "no donor" (compared lowercased): R's NA can arrive as
+# the text 'NA', as in the Green 2024 atlas.
+MISSING_DONOR_IDS = ("", "na", "nan", "none")
 
 
 def validate_file_path(path: Path, extensions: List[str]) -> None:
@@ -101,12 +107,19 @@ def _select_counts(adata: ad.AnnData, layer: Optional[str], use_raw: bool) -> ad
     return adata
 
 
-def _ensure_donor_column(adata: ad.AnnData, donor_column: Optional[str] = None) -> ad.AnnData:
+def _ensure_donor_column(
+    adata: ad.AnnData,
+    donor_column: Optional[str] = None,
+    min_cells_per_donor: int = MIN_CELLS_PER_DONOR,
+) -> ad.AnnData:
     """Fill obs['Donor ID'] (from `donor_column`, else existing, else projid).
 
-    Cells without a donor are dropped (they cannot go into a per-donor graph);
-    only their number is logged.
+    Drops cells without a donor (missing, or a placeholder such as 'NA') and
+    donors with fewer than `min_cells_per_donor` cells: neither can go into a
+    per-donor HVG fit or kNN graph. Only counts are logged, never donor IDs.
     """
+    if min_cells_per_donor < 2:
+        raise ValueError(f"min_cells_per_donor must be at least 2, got {min_cells_per_donor}")
     if donor_column is not None:
         if donor_column not in adata.obs.columns:
             raise ValueError(f"Donor column '{donor_column}' not in obs")
@@ -118,10 +131,26 @@ def _ensure_donor_column(adata: ad.AnnData, donor_column: Optional[str] = None) 
         logger.info(f"Using 'projid' as {DONOR_ID_COLUMN}")
         adata.obs[DONOR_ID_COLUMN] = adata.obs["projid"]
 
-    missing = adata.obs[DONOR_ID_COLUMN].isna().to_numpy()
+    donors = adata.obs[DONOR_ID_COLUMN]
+    ids = donors.astype(str)
+    missing = donors.isna().to_numpy() | ids.str.strip().str.lower().isin(MISSING_DONOR_IDS).to_numpy()
     if missing.any():
         logger.warning(f"Dropping {int(missing.sum())} cells without a donor ID")
-        adata = adata[~missing].copy()
+
+    cells_per_donor = ids[~missing].value_counts()
+    small = cells_per_donor.index[cells_per_donor < min_cells_per_donor]
+    too_small = ~missing & ids.isin(small).to_numpy()
+    if too_small.any():
+        logger.warning(
+            f"Dropping {len(small)} donors with fewer than {min_cells_per_donor} cells "
+            f"({int(too_small.sum())} cells)"
+        )
+
+    keep = ~(missing | too_small)
+    if not keep.all():
+        adata = adata[keep].copy()
+        if isinstance(adata.obs[DONOR_ID_COLUMN].dtype, pd.CategoricalDtype):
+            adata.obs[DONOR_ID_COLUMN] = adata.obs[DONOR_ID_COLUMN].cat.remove_unused_categories()
     return adata
 
 
@@ -331,6 +360,7 @@ def process_h5ad(
     allow_missing_genes: bool = False,
     min_genes: int = MIN_GENES_PER_CELL,
     min_cells: int = MIN_CELLS_PER_GENE,
+    min_cells_per_donor: int = MIN_CELLS_PER_DONOR,
     n_pca_components: int = DEFAULT_PCA_COMPONENTS,
     target_sum: float = NORMALIZE_TARGET_SUM,
     overwrite: bool = False,
@@ -369,6 +399,8 @@ def process_h5ad(
     donor_column : str, optional
         obs column holding the donor (default: 'Donor ID', else 'projid');
         cells without a donor are dropped
+    min_cells_per_donor : int
+        Donors with fewer cells (after cell filtering) are dropped
     allow_missing_genes : bool
         With a reference h5ad, zero-fill reference genes missing here
     target_sum : float
@@ -403,8 +435,8 @@ def process_h5ad(
         hvg_batch_key=hvg_batch_key, gene_map=gene_map, restrict_genes=restrict_genes,
         donor_column=donor_column,
         allow_missing_genes=allow_missing_genes,
-        min_genes=min_genes, min_cells=min_cells, n_pca_components=n_pca_components,
-        target_sum=target_sum,
+        min_genes=min_genes, min_cells=min_cells, min_cells_per_donor=min_cells_per_donor,
+        n_pca_components=n_pca_components, target_sum=target_sum,
     )
     for key, value in params.items():
         logger.info(f"{key}: {value}")
@@ -421,15 +453,19 @@ def process_h5ad(
     # Filtering
     logger.info(f"Shape before filtering: {adata.shape}")
     sc.pp.filter_cells(adata, min_genes=min_genes)
+    # Donors before genes, so the gene filter only counts cells that are kept
+    adata = _ensure_donor_column(adata, donor_column, min_cells_per_donor)
     if import_genes is None:
         sc.pp.filter_genes(adata, min_cells=min_cells)
     else:
         logger.info("Skipping gene filtering (importing gene list)")
     logger.info(f"Shape after filtering: {adata.shape}")
     if adata.n_obs == 0 or adata.n_vars == 0:
-        raise ValueError(f"Nothing left after filtering (min_genes={min_genes}, min_cells={min_cells})")
+        raise ValueError(
+            f"Nothing left after filtering (min_genes={min_genes}, min_cells={min_cells}, "
+            f"min_cells_per_donor={min_cells_per_donor})"
+        )
 
-    adata = _ensure_donor_column(adata, donor_column)
     if hvg_batch_key is not None and hvg_batch_key not in adata.obs.columns:
         raise ValueError(f"HVG batch key '{hvg_batch_key}' not in obs")
 
@@ -493,21 +529,15 @@ def process_h5ad(
 
     # Build KNN graph per donor
     logger.info("Building KNN graphs per donor")
+    # Every donor has at least min_cells_per_donor (>= 2) cells (see _ensure_donor_column)
     slices = []
-    skipped_donors = 0
     for donor in tqdm(adata.obs[DONOR_ID_COLUMN].unique(), desc="Processing donors"):
         donor_slice = adata[adata.obs[DONOR_ID_COLUMN] == donor].copy()
-        if donor_slice.shape[0] <= 1:
-            # Donor IDs are restricted information: count only, never log them.
-            skipped_donors += 1
-            continue
         if individual_pca:
             sc.pp.pca(donor_slice, n_comps=min(n_pca_components, min(donor_slice.shape) - 1))
         sc.pp.neighbors(donor_slice, n_neighbors=k_neighbors, use_rep="X_pca")
         slices.append(donor_slice)
 
-    if skipped_donors:
-        logger.warning(f"Skipped {skipped_donors} donors with fewer than 2 cells")
     logger.info(f"Processed {len(slices)} donors successfully")
 
     logger.info("Concatenating donor data")

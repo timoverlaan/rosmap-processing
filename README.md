@@ -63,7 +63,8 @@ ROSMAP-MIT symbols in pairs and triplets. Each processed file has
 `layers['counts']`, X = log1p(counts / total × 1e4) with totals over all genes,
 `obs['total_counts']`, `obs['Donor ID']` (projid; for Green 2024 its
 individualID), a per-donor kNN graph, and `uns['provenance_*']` with parameters
-and the git commit. Green cells without a donor ID are dropped (counted in the log).
+and the git commit. Cells without a donor ID (in Green 2024, the text `NA`) and
+donors with fewer than 50 cells are dropped (counted in the log).
 
 Green 2024 and Mathys 2023 are both ROSMAP DLPFC atlases and very likely share
 many participants: do not use one to validate a model trained on the other.

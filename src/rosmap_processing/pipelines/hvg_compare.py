@@ -31,6 +31,7 @@ from ..core.scanpy_pipeline import (
 )
 from ..utils.constants import (
     DONOR_ID_COLUMN,
+    MIN_CELLS_PER_DONOR,
     MIN_CELLS_PER_GENE,
     MIN_GENES_PER_CELL,
     NORMALIZE_TARGET_SUM,
@@ -82,6 +83,7 @@ def compare_hvgs(
     extra_lists: Optional[Dict[str, Union[str, Path]]] = None,
     min_genes: int = MIN_GENES_PER_CELL,
     min_cells: int = MIN_CELLS_PER_GENE,
+    min_cells_per_donor: int = MIN_CELLS_PER_DONOR,
     target_sum: float = NORMALIZE_TARGET_SUM,
 ) -> pd.DataFrame:
     """Run every HVG variant on one dataset and write lists + overlap tables."""
@@ -92,8 +94,8 @@ def compare_hvgs(
     logger.info(f"Loading {input_path}")
     adata = _select_counts(ad.read_h5ad(input_path), layer, use_raw=False)
     sc.pp.filter_cells(adata, min_genes=min_genes)
+    adata = _ensure_donor_column(adata, donor_column, min_cells_per_donor)
     sc.pp.filter_genes(adata, min_cells=min_cells)
-    adata = _ensure_donor_column(adata, donor_column)
     size_factors = total_counts(adata.X)
     if gene_map is not None:
         _attach_gene_ids(adata, gene_map)

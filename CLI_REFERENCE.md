@@ -99,8 +99,10 @@ Ensembl IDs mapped in every given map, in the first map's order.
 python -m rosmap_processing pipeline scanpy <counts.h5ad> <output.h5ad> [options]
 ```
 1. Takes the counts from X (or `--layer`, `--raw`) and checks they are integers.
-2. Filters cells (`--min-genes`, default 200) and, unless a gene list is
-   imported, genes (`--min-cells`, default 5).
+2. Filters cells (`--min-genes`, default 200), then drops cells without a
+   donor (missing, or a placeholder such as `NA`) and donors with fewer than
+   `--min-cells-per-donor` cells (default 50), then, unless a gene list is
+   imported, filters genes (`--min-cells`, default 5).
 3. Computes per-cell totals over all genes, used for normalization.
 4. Chooses genes (below), then sets X = log1p(counts / total × `--target-sum`)
    (default 1e4) and keeps the counts in `layers['counts']`.
