@@ -34,7 +34,8 @@ def test_compare_hvgs_writes_lists_and_overlaps(tmp_path):
 
     out = tmp_path / "cmp"
     overlaps = compare_hvgs(src, out, n_genes=[10, 20], flavors=["seurat"],
-                            extra_lists={"mine": extra}, min_genes=1, min_cells=1)
+                            extra_lists={"mine": extra}, min_genes=1, min_cells=1,
+                            min_cells_per_donor=10)
 
     for name in ["seurat_donor_10", "seurat_pooled_10", "seurat_donor_20", "seurat_pooled_20"]:
         genes = (out / f"hvg_{name}.txt").read_text().split()
