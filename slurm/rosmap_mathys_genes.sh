@@ -7,7 +7,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=500GB
+#SBATCH --mem=400GB
 #SBATCH --mail-type=END
 #SBATCH --output=slurm/out/%j_mathys_genes.out
 #SBATCH --error=slurm/out/%j_mathys_genes.out
