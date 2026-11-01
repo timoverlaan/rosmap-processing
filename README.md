@@ -100,6 +100,7 @@ sbatch slurm/mathys2023_for_adprs.sh              # ad-prs aggregates
 sbatch slurm/obs_summary.sh                       # obs column names/types of the count files (no values)
 sbatch slurm/batch_effects.sh config/batch_effects/rosmap_mit.yaml    # batch effects within MIT
 sbatch slurm/batch_effects.sh config/batch_effects/rosmap_green.yaml  # within Green 2024
+sbatch slurm/batch_effects.sh config/batch_effects/seaad.yaml         # within SeaAD (library, chemistry)
 sbatch slurm/batch_effects.sh config/batch_effects/mit_vs_seaad.yaml  # dataset effect MIT vs SeaAD
 sbatch slurm/batch_effects.sh config/batch_effects/mit_vs_green.yaml  # MIT vs Green, shared donors
 ```

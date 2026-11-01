@@ -6,6 +6,7 @@
 # Submit from the repo root:
 #   sbatch slurm/batch_effects.sh config/batch_effects/rosmap_mit.yaml
 #   sbatch slurm/batch_effects.sh config/batch_effects/rosmap_green.yaml
+#   sbatch slurm/batch_effects.sh config/batch_effects/seaad.yaml
 #   sbatch slurm/batch_effects.sh config/batch_effects/mit_vs_seaad.yaml
 #   sbatch slurm/batch_effects.sh config/batch_effects/mit_vs_green.yaml
 #SBATCH --account=daic-eemcs-insy-prb

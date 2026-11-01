@@ -1,0 +1,46 @@
+# Batch effects within SeaAD: library, chemistry and vendor batch vs donor,
+# cell type and donor covariates, on the gene sets of the MIT/SeaAD pairs.
+#   sbatch slurm/batch_effects.sh config/batch_effects/seaad.yaml
+output_dir: data/v2/batch_effects/seaad
+max_cells_per_donor: 300
+
+datasets:
+  seaad:
+    counts:
+      - data/v2/counts/SeaAD/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad
+      - data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad
+    layer: UMIs
+    gene_map: data/v2/reference/seaad_gene_map.tsv
+    donor: Donor ID
+    # Subclass; core column-mapping renames it to Celltype (adjust if the copy is used)
+    celltype:
+      - {column: Subclass, match: "^L[0-9]", label: Exc}
+      - {column: Subclass, match: "^(Lamp5|Pax6|Sncg|Vip|Pvalb|Sst|Chandelier)", label: Inh}
+      - {column: Subclass, match: "^Astro", label: Ast}
+      - {column: Subclass, match: "^Oligo", label: Oli}
+      - {column: Subclass, match: "^OPC", label: OPC}
+      - {column: Subclass, match: "^Micro", label: Mic}
+      - {column: Subclass, match: "^(Endo|VLMC)", label: Vasc}
+    # From the obs summary (Nov 2026): library_prep has 202 libraries, 1-4 per
+    # donor (null within donors); method 3 chemistries, a quarter of the donors
+    # have two; batch_vendor_name 60 batches, 46% of donors in several.
+    batch: [library_prep, method, batch_vendor_name]
+    covariates:
+      dementia: {column: Cognitive Status, recode: {"Dementia": "yes", "No dementia": "no"}}
+      sex: {column: Sex}
+      age: {column: Age at Death, numeric: true}
+      adnc: {column: Overall AD neuropathological Change}
+      braak: {column: Braak}
+
+gene_sets:
+  seurat_v3_donor_1000: data/v2/processed/seaad_hvg1000_k30.h5ad
+  seurat_v3_donor_2000: data/v2/processed/seaad_hvg2000_k30.h5ad
+  seurat_v3_donor_3000: data/v2/processed/seaad_hvg3000_k30.h5ad
+  seurat_donor_1000: data/v2/processed/seaad_hvg1000_postnorm_k30.h5ad
+  seurat_donor_2000: data/v2/processed/seaad_hvg2000_postnorm_k30.h5ad
+  seurat_donor_3000: data/v2/processed/seaad_hvg3000_postnorm_k30.h5ad
+  seurat_v3_donor_2000_3way: data/v2/processed/seaad_hvg2000_3way_k30.h5ad
+  lieke_hvg: data/v2/processed/seaad_lieke_hvg_k30.h5ad
+  lieke_allgenes_seurat_v3_2000: data/v2/processed/seaad_lieke_allgenes_hvg2k_k30.h5ad
+  lieke_allgenes_seurat_2000: data/v2/processed/seaad_lieke_allgenes_hvg2k_postnorm_k30.h5ad
+  mathys2019_degs: data/v2/processed/seaad_mathys2019degs_k30.h5ad
