@@ -2,7 +2,8 @@
 # types, on the gene sets of the MIT/SeaAD pairs (identical genes by Ensembl ID).
 #   sbatch slurm/batch_effects.sh config/batch_effects/mit_vs_seaad.yaml
 # Covariates are recoded to shared labels; values outside a recode map count
-# as missing. SeaAD column names: CHECK against the obs summary.
+# as missing (the log counts the donors with a value). PMI is left out: in
+# SeaAD it is stored as a category.
 output_dir: data/v2/batch_effects/mit_vs_seaad
 max_cells_per_donor: 300
 
@@ -23,29 +24,28 @@ datasets:
       dementia: {column: cogdx, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
       sex: {column: msex, recode: {"0": female, "1": male}}
       age: {column: age_death, numeric: true}
-      pmi: {column: pmi, numeric: true}
   seaad:
-    # The column-mapped copy from run_all_seaad.sh, else the original download
+    # The column-mapped copy from run_all_seaad.sh if it exists, else the
+    # original download (not column-mapped: it has Subclass, not Celltype)
     counts:
       - data/v2/counts/SeaAD/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad
       - data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad
     layer: UMIs
     gene_map: data/v2/reference/seaad_gene_map.tsv
     donor: Donor ID
-    # Celltype is SeaAD's Subclass (renamed by core column-mapping)
+    # Subclass; core column-mapping renames it to Celltype (adjust if the copy is used)
     celltype:
-      - {column: Celltype, match: "^L[0-9]", label: Exc}
-      - {column: Celltype, match: "^(Lamp5|Pax6|Sncg|Vip|Pvalb|Sst|Chandelier)", label: Inh}
-      - {column: Celltype, match: "^Astro", label: Ast}
-      - {column: Celltype, match: "^Oligo", label: Oli}
-      - {column: Celltype, match: "^OPC", label: OPC}
-      - {column: Celltype, match: "^Micro", label: Mic}
-      - {column: Celltype, match: "^(Endo|VLMC)", label: Vasc}
+      - {column: Subclass, match: "^L[0-9]", label: Exc}
+      - {column: Subclass, match: "^(Lamp5|Pax6|Sncg|Vip|Pvalb|Sst|Chandelier)", label: Inh}
+      - {column: Subclass, match: "^Astro", label: Ast}
+      - {column: Subclass, match: "^Oligo", label: Oli}
+      - {column: Subclass, match: "^OPC", label: OPC}
+      - {column: Subclass, match: "^Micro", label: Mic}
+      - {column: Subclass, match: "^(Endo|VLMC)", label: Vasc}
     covariates:
       dementia: {column: Cognitive Status, recode: {"Dementia": "yes", "No dementia": "no"}}
       sex: {column: Sex, recode: {"Female": female, "Male": male}}
       age: {column: Age at Death, numeric: true}
-      pmi: {column: PMI, numeric: true}
 
 gene_sets:
   seurat_v3_donor_1000: data/v2/processed/rosmap_mit_hvg1000_k30.h5ad

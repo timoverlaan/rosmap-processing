@@ -16,6 +16,9 @@
 source slurm/common.sh
 
 DIR="$V2/batch_effects"
-rp utils obs-summary "$MIT_COUNTS" --donor-column projid --output "$DIR/obs_summary_rosmap_mit.tsv"
-rp utils obs-summary "$GREEN_COUNTS" --donor-column "$GREEN_DONOR" --output "$DIR/obs_summary_rosmap_green.tsv"
-rp utils obs-summary "$SEAAD_H5AD" --donor-column "Donor ID" --output "$DIR/obs_summary_seaad.tsv"
+skip_if_exists "$DIR/obs_summary_rosmap_mit.tsv" \
+    rp utils obs-summary "$MIT_COUNTS" --donor-column projid --output "$DIR/obs_summary_rosmap_mit.tsv"
+skip_if_exists "$DIR/obs_summary_rosmap_green.tsv" \
+    rp utils obs-summary "$GREEN_COUNTS" --donor-column "$GREEN_DONOR" --output "$DIR/obs_summary_rosmap_green.tsv"
+skip_if_exists "$DIR/obs_summary_seaad.tsv" \
+    rp utils obs-summary "$SEAAD_H5AD" --donor-column "Donor ID" --output "$DIR/obs_summary_seaad.tsv"

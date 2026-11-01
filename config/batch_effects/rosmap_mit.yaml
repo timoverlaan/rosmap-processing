@@ -20,10 +20,11 @@ datasets:
       - {column: source_file, match: "OPCs", label: OPC}
       # Microglia only: the immune file also holds T cells and CAMs
       - {column: cell_type_high_resolution, match: "^Mic", label: Mic}
-    # Technical batch columns: TO FILL IN from the obs summary
-    # (data/v2/batch_effects/obs_summary_rosmap_mit.tsv, slurm/obs_summary.sh)
+    # The count file has no technical batch column (obs summary, Nov 2026):
+    # the h5Seurat metadata holds only cell types and the clinical columns.
     batch: []
     covariates:
+      study: {column: Study}
       diagnosis: {column: cogdx}
       sex: {column: msex}
       age: {column: age_death, numeric: true}

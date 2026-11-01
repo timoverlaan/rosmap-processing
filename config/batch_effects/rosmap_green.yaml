@@ -13,15 +13,19 @@ datasets:
       - {column: source_file, match: "cux2", label: Exc}
       - {column: source_file, match: "/inhibitory", label: Inh}
       - {column: source_file, match: "/astrocytes", label: Ast}
-      # OPCs are in the oligodendroglia file; CHECK the subset names (the log
-      # counts cells per cell type, so 0 OPCs means this rule needs changing)
+      # OPCs are in the oligodendroglia file. The rule matches the state or
+      # subset name; the log counts cells per cell type, so 0 OPCs means it
+      # needs changing.
+      - {column: state, match: "^OPC", label: OPC}
       - {column: subset, match: "OPC|precursor", label: OPC}
       - {column: source_file, match: "oligodendroglia", label: Oli}
       - {column: source_file, match: "microglia", label: Mic}
       - {column: source_file, match: "vascular", label: Vasc}
-    # Technical batch columns; CHECK against the obs summary
+    # 127 batches, cell level (donors are split over up to 19 batches), so
+    # the null shuffles batch within donors
     batch: [batch]
     covariates:
+      study: {column: Study}
       diagnosis: {column: cogdx}
       sex: {column: msex}
       age: {column: age_death, numeric: true}

@@ -21,10 +21,13 @@ donor covariates. Several: the dataset label within each broad cell type; with
 match_donors, only donors present in every dataset (matched on `match_on`),
 plus the paired dataset-vs-donor decomposition.
 
-Most technical batches hold whole donors, so a batch label also carries donor
-differences. Every batch, dataset and covariate metric therefore comes with a
-null: the same label shuffled between donors (within donors, for the dataset
-label of matched donors). `excess` = value - null mean.
+A batch that holds whole donors also carries their differences, so every
+batch, dataset and covariate metric comes with a null (`null_type`): the same
+label shuffled between donors. A label that splits donors is shuffled within
+each donor instead: a batch of pooled libraries (which has no donor-level
+value, so it stays out of the donor-level metrics), and the dataset of matched
+donors (whose donor-level metric is the paired decomposition, plus the
+classifier). `excess` = value - null mean.
 
 Outputs in the spec's output_dir. All are aggregates: rows are gene sets x
 cell types x labels, never donors; cell types with fewer than min_donors
@@ -65,6 +68,7 @@ from ..utils.constants import (
 )
 from ..utils.counts import count_non_integer_values, log_normalize, total_counts
 from ..utils.logging import get_logger
+from ..utils.obs_summary import obs_column_names, read_obs_column
 from ..utils.provenance import provenance_record
 
 try:
@@ -90,6 +94,7 @@ DEFAULTS: Dict[str, Any] = {
     "chunk_size": 50000,
 }
 REQUIRED = ("output_dir", "datasets", "gene_sets")
+CONFOUNDING_COLUMNS = ["grouping", "covariate", "metric", "value", "p_value", "n_donors", "n_groups"]
 DATASET_KEYS = {"counts", "layer", "gene_map", "donor", "match_on", "celltype", "batch", "covariates"}
 
 
@@ -229,11 +234,10 @@ def prepare_dataset(name: str, cfg: Dict[str, Any], spec: Dict[str, Any]) -> Dat
         # Stored entries per row; `pipeline scanpy` counts values > 0, which is
         # the same unless explicit zeros are stored.
         n_genes = np.diff(node["indptr"][()])
-        obs = f["obs"]
-        missing = sorted(c for c in columns if c not in obs)
+        missing = sorted(set(columns) - set(obs_column_names(f)))
         if missing:
             raise ValueError(f"[{name}] obs has no column(s) {missing}")
-        raw = {c: read_elem(obs[c]) for c in columns}
+        raw = {c: read_obs_column(f, c) for c in columns}
     n = len(n_genes)
 
     stats = {"cells_in_file": n}
@@ -268,6 +272,11 @@ def prepare_dataset(name: str, cfg: Dict[str, Any], spec: Dict[str, Any]) -> Dat
     logger.info(f"[{name}] " + ", ".join(f"{k}={v}" for k, v in stats.items()))
     for t, count in cells["celltype"].value_counts().items():
         logger.info(f"[{name}]   {t}: {count} cells")
+    # Counts only, so a recode map that matches nothing shows up here
+    for column in [f"batch:{c}" for c in cfg["batch"]] + list(covariates):
+        with_value = cells.loc[cells[column].notna(), "donor"].nunique()
+        logger.info(f"[{name}]   {column}: {with_value} of {stats['donors_kept']} donors have a value, "
+                    f"{cells[column].nunique()} distinct")
     return Dataset(name=name, cfg=cfg, path=path, var_names=var_names, cells=cells, stats=stats)
 
 
@@ -468,7 +477,7 @@ def cell_metrics(gs: str, X: np.ndarray, cells: pd.DataFrame, labels: Dict[str, 
             null_mean, null_sd = _null(pcr, v, d, label, spec, rng)
             n_levels = np.nan if label.numeric else len(set(v))
             rows.append(_row(**base, label=name, metric="pc_regression", value=pcr(v),
-                             null_mean=null_mean, null_sd=null_sd, n_levels=n_levels))
+                             null_mean=null_mean, null_sd=null_sd, null_type=label.null, n_levels=n_levels))
             if name == "celltype":
                 rows.append(_row(**base, label=name, metric="silhouette", value=bm.label_asw(
                     pcs, values, rng, spec["max_cells_silhouette"]), n_levels=n_levels))
@@ -483,11 +492,11 @@ def cell_metrics(gs: str, X: np.ndarray, cells: pd.DataFrame, labels: Dict[str, 
             ratio = lambda lab, k=k: bm.mixing_ratio(k, lab)[0]
             null_mean, null_sd = _null(ratio, v, d, label, spec, rng)
             rows.append(_row(**base, label=name, metric="mixing_ratio", value=ratio(v),
-                             null_mean=null_mean, null_sd=null_sd, n_levels=n_levels))
+                             null_mean=null_mean, null_sd=null_sd, null_type=label.null, n_levels=n_levels))
             kbet = lambda lab, k=k: bm.knn_chi2_rejection(k, lab)
             null_mean, null_sd = _null(kbet, v, d, label, spec, rng)
             rows.append(_row(**base, label=name, metric="knn_rejection", value=kbet(v),
-                             null_mean=null_mean, null_sd=null_sd, n_levels=n_levels))
+                             null_mean=null_mean, null_sd=null_sd, null_type=label.null, n_levels=n_levels))
             rows.append(_row(**base, label=name, metric="batch_silhouette", value=bm.batch_asw(
                 p, v, np.zeros(len(v)), rng, spec["max_cells_silhouette"]), n_levels=n_levels))
     return rows
@@ -511,6 +520,11 @@ def donor_metrics(gs: str, table: pd.DataFrame, Y: np.ndarray, terms: Dict[str, 
             logger.info(f"{gs} / {celltype}: term {name} has {n_levels} levels for "
                         f"{len(table)} rows; left out of the model")
             continue
+        # A term missing for a whole dataset would drop that dataset from the model
+        empty = [d for d, v in values.groupby(table["dataset"]) if v.isna().all()]
+        if empty:
+            logger.info(f"{gs} / {celltype}: term {name} has no values in {empty}; left out of the model")
+            continue
         usable[name] = label
     complete = table[[label.column for label in usable.values()]].notna().all(axis=1).to_numpy()
     covs = table.loc[complete, [label.column for label in usable.values()]]
@@ -533,7 +547,7 @@ def donor_metrics(gs: str, table: pd.DataFrame, Y: np.ndarray, terms: Dict[str, 
             for i, (metric, value) in enumerate([("partial_r2_median", partial), ("r2_alone_median", alone)]):
                 null_mean, null_sd = bm.null_summary([n[i] for n in nulls])
                 rows.append(_row(**base, label=name, metric=metric, value=value, null_mean=null_mean,
-                                 null_sd=null_sd, n_donors=len(covs),
+                                 null_sd=null_sd, null_type="between", n_donors=len(covs),
                                  n_levels=np.nan if usable[name].numeric else covs[name].nunique()))
     for name in targets:
         if name not in table.columns:
@@ -635,7 +649,7 @@ def _confounding(donors: pd.DataFrame, groupers: List[str], covariates: Dict[str
                 metric = "cramers_v"
             rows.append({"grouping": g, "covariate": name, "metric": metric, "value": value,
                          "p_value": p, "n_donors": len(pair), "n_groups": pair[g].nunique()})
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=CONFOUNDING_COLUMNS)
 
 
 def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> Path:
@@ -669,27 +683,40 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
                        if all(k in ds.cfg["covariates"] for ds in datasets)]
     covariates = {k: Label(k, numeric=bool(datasets[0].cfg["covariates"][k].get("numeric")),
                            null="between") for k in covariate_names}
+    sample = pd.concat([ds.sample.assign(dataset=ds.name) for ds in datasets], ignore_index=True)
     labels: Dict[str, Label] = {"celltype": Label("celltype"), "donor": Label("donor")}
     if single:
-        groupers = [f"batch:{c}" for c in datasets[0].cfg["batch"]]
-        labels.update({g: Label(g, null="between", mixing=True) for g in groupers})
+        # A batch that holds whole donors is compared with itself shuffled
+        # between donors. One that splits donors (pooled libraries) is
+        # compared with itself shuffled within each donor, and has no
+        # donor-level value, so it stays out of the donor-level metrics.
+        groupers = []
+        for col in [f"batch:{c}" for c in datasets[0].cfg["batch"]]:
+            labelled = sample.dropna(subset=[col])
+            several = float(labelled.groupby("donor")[col].nunique().gt(1).mean()) if len(labelled) else 0.0
+            within = several > 0.5
+            labels[col] = Label(col, null="within" if within else "between", mixing=True)
+            if not within:
+                groupers.append(col)
+            logger.info(f"{col}: {100 * several:.0f}% of donors have cells in several batches; "
+                        f"null shuffles it {'within' if within else 'between'} donors")
     else:
         groupers = ["dataset"]
         labels["dataset"] = Label("dataset", null="within" if spec["match_donors"] else "between",
                                   mixing=True)
     labels.update(covariates)
 
-    sample = pd.concat([ds.sample.assign(dataset=ds.name) for ds in datasets], ignore_index=True)
     celltypes = _celltypes_to_analyse(datasets, spec["min_donors"])
     logger.info(f"Cell types with >= {spec['min_donors']} donors in every dataset: {celltypes}")
     _cells_table(datasets, celltypes).to_csv(out / "cells.tsv", sep="\t", index=False)
 
     # One row per dataset x donor. With matched donors every donor is in every
     # dataset, so the dataset cannot be confounded with a donor covariate.
-    donor_cols = [c for c in sample.columns if c.startswith("batch:")] + covariate_names
+    donor_cols = [g for g in groupers if g.startswith("batch:")] + covariate_names
     donors = pd.concat([_donor_table(ds, donor_cols) for ds in datasets], ignore_index=True)
     matched = spec["match_donors"] and not single
-    confounding = pd.DataFrame() if matched else _confounding(donors, groupers, covariates)
+    confounding = pd.DataFrame(columns=CONFOUNDING_COLUMNS) if matched else \
+        _confounding(donors, groupers, covariates)
     confounding.to_csv(out / "confounding.tsv", sep="\t", index=False, float_format="%.4g")
 
     cell_rows: List[Dict[str, Any]] = []

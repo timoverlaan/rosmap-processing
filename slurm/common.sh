@@ -14,8 +14,8 @@ CONTAINER="${CONTAINER:-./container_pixi_0-2-1.sif}"
 V2="data/v2"
 
 # SeaAD counts. run_all_seaad.sh writes a column-mapped copy into data/v2;
-# without it, the original download (already column-mapped in place in 2025)
-# is used.
+# without it, the original download is used, which is not column-mapped
+# (its obs has Subclass/Supertype, not Celltype/Subtype; checked Nov 2026).
 SEAAD_ORIGINAL="data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad"
 SEAAD_V2="$V2/counts/SeaAD/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad"
 if [ -z "${SEAAD_H5AD:-}" ]; then

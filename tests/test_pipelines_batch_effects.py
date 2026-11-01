@@ -18,22 +18,25 @@ DATASET_GENES = range(30, 40)    # up in the second dataset
 
 
 def _counts(path, rng, donors, batch_of, dataset_shift=False, cells_per_type=60, layer=None):
+    """batch_of: donor -> batch (whole donors per batch), or a list of batches
+    that each cell is assigned to at random (pooled libraries)."""
     rates = rng.gamma(1.0, 1.0, size=N_GENES)
     blocks, obs = [], []
     for d, donor in enumerate(donors):
         donor_effect = rng.lognormal(0, 0.2, size=N_GENES)
         for celltype in ("Excitatory", "Astrocytes"):
-            r = rates * donor_effect
+            r = np.tile(rates * donor_effect, (cells_per_type, 1))
             if celltype == "Astrocytes":
-                r[list(CELLTYPE_GENES)] *= 6
-            if batch_of[donor] == "B2":
-                r[list(BATCH_GENES)] *= 5
+                r[:, list(CELLTYPE_GENES)] *= 6
+            batch = np.array([batch_of[donor]] * cells_per_type) if isinstance(batch_of, dict) \
+                else rng.choice(batch_of, size=cells_per_type)
+            r[np.ix_(batch == "B2", list(BATCH_GENES))] *= 5
             if dataset_shift:
-                r[list(DATASET_GENES)] *= 5
+                r[:, list(DATASET_GENES)] *= 5
             depth = rng.uniform(0.5, 2.0, size=(cells_per_type, 1))
             blocks.append(rng.poisson(r * depth))
             obs.append(pd.DataFrame({
-                "projid": 1000 + d, "individualID": donor, "batch": batch_of[donor],
+                "projid": 1000 + d, "individualID": donor, "batch": batch,
                 "source_file": f"data/v2/counts/X/{celltype}.h5ad",
                 "cogdx": 1 if d % 2 else 4, "msex": d % 3 % 2,
                 "age_death": "90+" if d % 4 == 0 else str(75 + d), "pmi": 5.0 + d,
@@ -191,6 +194,66 @@ def test_counts_layer_must_hold_counts(tmp_path):
         {"g": str(tmp_path / "with_batch_genes.txt")}, min_donors=2)
     with pytest.raises(ValueError, match="not counts"):
         run_batch_effects(spec)  # X holds counts * 0.5, the counts are in layer UMIs
+
+
+def test_batch_that_splits_donors(tmp_path):
+    rng = np.random.default_rng(5)
+    donors = [f"R{700 + i}" for i in range(8)]
+    names = _counts(tmp_path / "pooled.h5ad", rng, donors, ["B1", "B2", "B3"])
+    _gene_files(tmp_path, list(names))
+    spec = _write_spec(tmp_path, "pooled", {"one": {
+        "counts": str(tmp_path / "pooled.h5ad"), "donor": "projid", "celltype": CELLTYPES,
+        "batch": ["batch"], "covariates": COVARIATES,
+    }}, {"with batch genes": str(tmp_path / "with_batch_genes.txt"),
+         "without batch genes": str(tmp_path / "without_batch_genes.txt")})
+
+    out = run_batch_effects(spec)
+    m = pd.read_csv(out / "cell_metrics.tsv", sep="\t")
+    pcr = m[(m["label"] == "batch:batch") & (m["metric"] == "pc_regression") & (m["celltype"] == "Exc")]
+    assert set(pcr["null_type"]) == {"within"}
+    excess = pcr.set_index("gene_set")["excess"]
+    assert excess["with batch genes"] > 0.1
+    assert abs(excess["without batch genes"]) < 0.05
+    # No donor-level value, so no donor-level batch rows
+    d = pd.read_csv(out / "donor_metrics.tsv", sep="\t")
+    assert "batch:batch" not in set(d["label"])
+    assert "batch:batch" not in set(pd.read_csv(out / "confounding.tsv", sep="\t")["grouping"])
+
+
+def _legacy_h5ad(path, n=40):
+    """obs in the anndata < 0.8 layout, as in the SeaAD download: categoricals
+    as codes referring to their categories, names with '/' as nested groups."""
+    import h5py
+
+    columns = {"Donor ID": (np.repeat([0, 1], n // 2), ["H1", "H2"]),
+               "Sex": (np.tile([0, 1], n // 2), ["Female", "Male"]),
+               "Hispanic/Latino": (np.r_[np.full(n - 1, 0), -1], ["No", "Yes"])}
+    with h5py.File(path, "w") as f:
+        obs = f.create_group("obs")
+        obs.attrs.update({"_index": "cell", "encoding-type": "dataframe", "encoding-version": "0.1.0",
+                          "column-order": np.array([*columns, "Age at Death"], dtype=h5py.string_dtype())})
+        obs.create_dataset("cell", data=np.array([f"c{i}" for i in range(n)], dtype=h5py.string_dtype()))
+        for name, (codes, categories) in columns.items():
+            cats = obs.create_dataset(f"__categories/{name}", data=np.array(categories, dtype=h5py.string_dtype()))
+            obs.create_dataset(name, data=codes.astype(np.int8)).attrs["categories"] = cats.ref
+        obs.create_dataset("Age at Death", data=np.linspace(70, 95, n))
+
+
+def test_reads_the_old_anndata_layout(tmp_path):
+    import h5py
+
+    from rosmap_processing.utils.obs_summary import obs_column_names, read_obs_column
+
+    _legacy_h5ad(tmp_path / "old.h5ad")
+    with h5py.File(tmp_path / "old.h5ad", "r") as f:
+        assert obs_column_names(f) == ["Donor ID", "Sex", "Hispanic/Latino", "Age at Death"]
+        sex = read_obs_column(f, "Sex")
+        assert list(sex.categories) == ["Female", "Male"] and sex[1] == "Male"
+        hispanic = pd.Series(read_obs_column(f, "Hispanic/Latino"))
+        assert hispanic.isna().sum() == 1
+    table = summarize_obs(tmp_path / "old.h5ad", donor_column="Donor ID").set_index("column")
+    assert table.loc["Sex", "level"] == "cell" and table.loc["Sex", "n_unique"] == 2
+    assert table.loc["Hispanic/Latino", "pct_missing"] == 2.5
 
 
 def test_spec_rejects_unknown_keys(tmp_path):

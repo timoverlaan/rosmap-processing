@@ -25,6 +25,33 @@ logger = get_logger(__name__)
 DONOR_CANDIDATES = ("Donor ID", "projid", "individualID")
 
 
+def obs_column_names(f: h5py.File) -> List[str]:
+    """obs column names in order. Names with '/' (stored as nested groups in the
+    anndata < 0.8 layout) are kept whole."""
+    obs = f["obs"]
+    order = obs.attrs.get("column-order")
+    if order is not None:
+        return [c.decode() if isinstance(c, bytes) else str(c) for c in order]
+    return [c for c in obs.keys() if c not in (obs.attrs["_index"], "__categories")]
+
+
+def read_obs_column(f: h5py.File, name: str):
+    """One obs column as an array or Categorical, for the current layout and
+    the anndata < 0.8 one (as in the SeaAD download), where a categorical is
+    stored as codes with a reference to its categories."""
+    node = f["obs"][name]
+    if isinstance(node, h5py.Dataset) and "categories" in node.attrs:
+        categories = f[node.attrs["categories"]][()]
+        categories = [c.decode() if isinstance(c, bytes) else c for c in categories]
+        return pd.Categorical.from_codes(node[()].astype(int), categories)
+    return read_elem(node)
+
+
+def _missing(values: pd.Series) -> pd.Series:
+    """Missing, or a placeholder such as 'NA' (R's NA arrives as text)."""
+    return values.isna() | values.astype(str).str.strip().str.lower().isin(("", "na", "nan", "none"))
+
+
 def _matrices(f: h5py.File) -> List[str]:
     """'X', 'layers/<name>', 'raw/X' with their encoding and shape."""
     out = []
@@ -47,9 +74,7 @@ def summarize_obs(path: Union[str, Path], donor_column: Optional[str] = None) ->
     """One row per obs column (see module docstring)."""
     path = Path(path)
     with h5py.File(path, "r") as f:
-        obs = f["obs"]
-        index_name = obs.attrs["_index"]
-        columns = [c for c in obs.keys() if c not in (index_name, "__categories")]
+        columns = obs_column_names(f)
         for line in _matrices(f):
             logger.info(f"{path}: {line}")
         logger.info(f"{path}: uns keys {sorted(f['uns'].keys()) if 'uns' in f else []}")
@@ -57,13 +82,14 @@ def summarize_obs(path: Union[str, Path], donor_column: Optional[str] = None) ->
             donor_column = next((c for c in DONOR_CANDIDATES if c in columns), None)
         donors = None
         if donor_column is not None:
-            donors = pd.Series(read_elem(obs[donor_column])).astype(str).to_numpy()
-            n_donors = len(set(donors))
+            donors = pd.Series(read_obs_column(f, donor_column))
+            donors = donors.astype(str).where(~_missing(donors)).to_numpy()
+            n_donors = len(set(donors[~pd.isna(donors)]))
             logger.info(f"{path}: {len(donors)} cells, donor column '{donor_column}', {n_donors} donors")
         rows = []
         for col in columns:
-            values = pd.Series(read_elem(obs[col]))
-            missing = values.isna() | values.astype(str).str.strip().str.lower().isin(("", "na", "nan", "none"))
+            values = pd.Series(read_obs_column(f, col))
+            missing = _missing(values)
             present = values[~missing]
             row = {
                 "file": str(path), "column": col, "dtype": str(values.dtype),
