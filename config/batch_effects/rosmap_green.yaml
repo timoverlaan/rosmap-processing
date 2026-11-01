@@ -1,0 +1,43 @@
+# Batch effects within ROSMAP Green 2024: technical batch vs donor, cell type
+# and donor covariates, for every gene set below.
+#   sbatch slurm/batch_effects.sh config/batch_effects/rosmap_green.yaml
+output_dir: data/v2/batch_effects/rosmap_green
+max_cells_per_donor: 300
+
+datasets:
+  rosmap_green:
+    counts: data/v2/counts/ROSMAP/combined.h5ad
+    gene_map: data/v2/reference/rosmap_green_gene_map.tsv
+    donor: individualID
+    celltype:
+      - {column: source_file, match: "cux2", label: Exc}
+      - {column: source_file, match: "/inhibitory", label: Inh}
+      - {column: source_file, match: "/astrocytes", label: Ast}
+      # OPCs are in the oligodendroglia file; CHECK the subset names (the log
+      # counts cells per cell type, so 0 OPCs means this rule needs changing)
+      - {column: subset, match: "OPC|precursor", label: OPC}
+      - {column: source_file, match: "oligodendroglia", label: Oli}
+      - {column: source_file, match: "microglia", label: Mic}
+      - {column: source_file, match: "vascular", label: Vasc}
+    # Technical batch columns; CHECK against the obs summary
+    batch: [batch]
+    covariates:
+      diagnosis: {column: cogdx}
+      sex: {column: msex}
+      age: {column: age_death, numeric: true}
+      pmi: {column: pmi, numeric: true}
+      braak: {column: braaksc, numeric: true}
+
+gene_sets:
+  seurat_v3_donor_1000: data/v2/processed/rosmap_green_hvg1000_k30.h5ad
+  seurat_v3_donor_2000: data/v2/processed/rosmap_green_hvg2000_k30.h5ad
+  seurat_v3_donor_3000: data/v2/processed/rosmap_green_hvg3000_k30.h5ad
+  seurat_donor_1000: data/v2/processed/rosmap_green_hvg1000_postnorm_k30.h5ad
+  seurat_donor_2000: data/v2/processed/rosmap_green_hvg2000_postnorm_k30.h5ad
+  seurat_donor_3000: data/v2/processed/rosmap_green_hvg3000_postnorm_k30.h5ad
+  seurat_v3_pooled_1000: data/v2/hvg_compare/rosmap_green/hvg_seurat_v3_pooled_1000.txt
+  seurat_v3_pooled_2000: data/v2/hvg_compare/rosmap_green/hvg_seurat_v3_pooled_2000.txt
+  seurat_v3_pooled_3000: data/v2/hvg_compare/rosmap_green/hvg_seurat_v3_pooled_3000.txt
+  seurat_pooled_2000: data/v2/hvg_compare/rosmap_green/hvg_seurat_pooled_2000.txt
+  # Chosen on ROSMAP-MIT among the genes all three datasets have
+  mit_seurat_v3_donor_2000_3way: data/v2/processed/rosmap_green_hvg2000_3way_k30.h5ad

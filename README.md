@@ -48,6 +48,7 @@ data/v2/counts/SeaAD/         SeaAD with ROSMAP-style columns (counts in layer '
 data/v2/reference/            gene maps (symbol -> Ensembl ID), shared_gene_ids.txt (MIT+SeaAD), shared_gene_ids_3way.txt (+Green)
 data/v2/processed/            processed datasets (below), mathys2023_for_adprs/
 data/v2/hvg_compare/          HVG variant lists and overlaps, per dataset
+data/v2/batch_effects/        obs column summaries and batch-effect tables (aggregates only)
 ```
 
 Processed datasets:
@@ -96,7 +97,16 @@ sbatch slurm/rosmap_mathys_genes.sh               # mathys2019degs_k30 pair
 sbatch slurm/aligned_hvg.sh                       # hvg2000_3way_k30 triplet (MIT, SeaAD, Green)
 sbatch slurm/green_hvg.sh                         # Green 2024 standalone: hvg{1000,2000,3000}[_postnorm]_k30
 sbatch slurm/mathys2023_for_adprs.sh              # ad-prs aggregates
+sbatch slurm/obs_summary.sh                       # obs column names/types of the count files (no values)
+sbatch slurm/batch_effects.sh config/batch_effects/rosmap_mit.yaml    # batch effects within MIT
+sbatch slurm/batch_effects.sh config/batch_effects/rosmap_green.yaml  # within Green 2024
+sbatch slurm/batch_effects.sh config/batch_effects/mit_vs_seaad.yaml  # dataset effect MIT vs SeaAD
+sbatch slurm/batch_effects.sh config/batch_effects/mit_vs_green.yaml  # MIT vs Green, shared donors
 ```
+
+The batch-effect specs name obs columns (batch, cell type, covariates); check
+them against the obs summary before submitting. Their outputs are aggregate
+tables (see `pipeline batch-effects` in CLI_REFERENCE.md).
 
 HVGs are selected per donor by default (`--hvg-batch-key "Donor ID"`): genes
 must vary between cells within donors, so donor-level differences (sex genes,

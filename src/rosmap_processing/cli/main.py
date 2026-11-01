@@ -195,6 +195,14 @@ def main():
     compare_parser.add_argument("--min-cells-per-donor", type=int, default=MIN_CELLS_PER_DONOR)
     compare_parser.add_argument("--target-sum", type=float, default=NORMALIZE_TARGET_SUM)
 
+    # pipeline batch-effects
+    batch_parser = pipeline_subparsers.add_parser(
+        "batch-effects",
+        help="Technical vs biological variation per gene set (aggregate tables only), from a YAML spec",
+    )
+    batch_parser.add_argument("spec", type=str, help="YAML spec, e.g. config/batch_effects/rosmap_mit.yaml")
+    batch_parser.add_argument("--overwrite", action="store_true", help="Replace existing output tables")
+
     # pipeline mathys2023-for-adprs
     from rosmap_processing.pipelines.mathys2023_for_adprs import DEFAULT_INPUT_DIR, DEFAULT_OUTPUT_DIR
 
@@ -246,6 +254,15 @@ def main():
     )
     check_parser.add_argument("inputs", type=str, nargs="+", help="h5ad files")
     check_parser.add_argument("--key", type=str, default="X", help="Matrix to check: X, raw/X or layers/<name> (default: X)")
+
+    # utils obs-summary
+    obs_parser = utils_subparsers.add_parser(
+        "obs-summary", help="obs column names, types, distinct and missing counts, donor vs cell level (no values)"
+    )
+    obs_parser.add_argument("inputs", type=str, nargs="+", help="h5ad files")
+    obs_parser.add_argument("--output", type=str, required=True, help="Output TSV")
+    obs_parser.add_argument("--donor-column", type=str, default=None,
+                            help="obs column holding the donor (default: first of 'Donor ID', projid, individualID)")
 
     # Parse arguments
     args = parser.parse_args()
@@ -422,6 +439,10 @@ def handle_pipeline_command(args):
             target_sum=args.target_sum,
         )
 
+    elif args.pipeline_command == "batch-effects":
+        from rosmap_processing.pipelines.batch_effects import run_batch_effects
+        run_batch_effects(args.spec, overwrite=args.overwrite)
+
     elif args.pipeline_command == "mathys2023-for-adprs":
         from rosmap_processing.pipelines.mathys2023_for_adprs import run_pipeline
         logger.info(f"Running Mathys 2023 ad-prs aggregation; input={args.input_dir}")
@@ -460,6 +481,10 @@ def handle_utils_command(args):
                 failed.append(path)
         if failed:
             raise ValueError(f"{len(failed)} file(s) do not hold raw counts in {args.key}")
+
+    elif args.utils_command == "obs-summary":
+        from rosmap_processing.utils.obs_summary import summarize_obs_files
+        summarize_obs_files(args.inputs, args.output, donor_column=args.donor_column)
 
 
 if __name__ == "__main__":

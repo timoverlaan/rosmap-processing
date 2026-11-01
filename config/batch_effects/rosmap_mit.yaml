@@ -1,0 +1,50 @@
+# Batch effects within ROSMAP-MIT (Mathys 2023): technical batch vs donor,
+# cell type and donor covariates, for every gene set below.
+#   sbatch slurm/batch_effects.sh config/batch_effects/rosmap_mit.yaml
+# Settings not given here take the defaults in pipelines/batch_effects.py.
+output_dir: data/v2/batch_effects/rosmap_mit
+max_cells_per_donor: 300
+
+datasets:
+  rosmap_mit:
+    counts: data/v2/counts/ROSMAP_MIT/combined.h5ad
+    gene_map: data/v2/reference/rosmap_mit_gene_map.tsv
+    donor: projid
+    # Broad cell types; the first matching rule wins, other cells are left out.
+    # source_file is the per-class file the cell came from (core combine).
+    celltype:
+      - {column: source_file, match: "Excitatory", label: Exc}
+      - {column: source_file, match: "Inhibitory", label: Inh}
+      - {column: source_file, match: "Astrocytes", label: Ast}
+      - {column: source_file, match: "Oligodendrocytes", label: Oli}
+      - {column: source_file, match: "OPCs", label: OPC}
+      # Microglia only: the immune file also holds T cells and CAMs
+      - {column: cell_type_high_resolution, match: "^Mic", label: Mic}
+    # Technical batch columns: TO FILL IN from the obs summary
+    # (data/v2/batch_effects/obs_summary_rosmap_mit.tsv, slurm/obs_summary.sh)
+    batch: []
+    covariates:
+      diagnosis: {column: cogdx}
+      sex: {column: msex}
+      age: {column: age_death, numeric: true}
+      pmi: {column: pmi, numeric: true}
+      braak: {column: braaksc, numeric: true}
+
+# Gene sets: processed files (genes by Ensembl ID) or TXT lists (symbols)
+gene_sets:
+  seurat_v3_donor_1000: data/v2/processed/rosmap_mit_hvg1000_k30.h5ad
+  seurat_v3_donor_2000: data/v2/processed/rosmap_mit_hvg2000_k30.h5ad
+  seurat_v3_donor_3000: data/v2/processed/rosmap_mit_hvg3000_k30.h5ad
+  seurat_donor_1000: data/v2/processed/rosmap_mit_hvg1000_postnorm_k30.h5ad
+  seurat_donor_2000: data/v2/processed/rosmap_mit_hvg2000_postnorm_k30.h5ad
+  seurat_donor_3000: data/v2/processed/rosmap_mit_hvg3000_postnorm_k30.h5ad
+  seurat_v3_pooled_1000: data/v2/hvg_compare/rosmap_mit/hvg_seurat_v3_pooled_1000.txt
+  seurat_v3_pooled_2000: data/v2/hvg_compare/rosmap_mit/hvg_seurat_v3_pooled_2000.txt
+  seurat_v3_pooled_3000: data/v2/hvg_compare/rosmap_mit/hvg_seurat_v3_pooled_3000.txt
+  seurat_pooled_2000: data/v2/hvg_compare/rosmap_mit/hvg_seurat_pooled_2000.txt
+  seurat_v3_donor_2000_3way: data/v2/processed/rosmap_mit_hvg2000_3way_k30.h5ad
+  lieke_hvg: data/v2/processed/rosmap_mit_lieke_hvg_k30.h5ad
+  lieke_allgenes_seurat_v3_2000: data/v2/processed/rosmap_mit_lieke_allgenes_hvg2k_k30.h5ad
+  lieke_allgenes_seurat_2000: data/v2/processed/rosmap_mit_lieke_allgenes_hvg2k_postnorm_k30.h5ad
+  mathys2019_degs: data/v2/processed/rosmap_mit_mathys2019degs_k30.h5ad
+  april_seurat_v3_pooled_2000: data/processed/rosmap_mit_hvg2000_k30.h5ad

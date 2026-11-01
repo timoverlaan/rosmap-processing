@@ -143,6 +143,33 @@ size, with the same filtering and normalization as `pipeline scanpy`. Writes
 `hvg_overlap_summary.tsv` (per-donor vs pooled per flavor and size). `--compare`
 adds other lists (TXT, or an h5ad's genes). Outputs hold gene names only.
 
+### `pipeline batch-effects`
+```bash
+python -m rosmap_processing pipeline batch-effects config/batch_effects/<name>.yaml [--overwrite]
+```
+How much variation is technical, per gene set, from the count files (so every
+gene set is compared on the same cells and normalization). The YAML spec lists
+the datasets (count file, layer, gene map, donor column, broad cell-type rules,
+technical batch columns, donor covariates) and the gene sets (processed h5ad
+files or TXT lists); see `config/batch_effects/` and the module docstring of
+`pipelines/batch_effects.py`. Applies the cell and donor filters of `pipeline
+scanpy`, samples up to 300 cells per donor, and reads the matrix once in row
+chunks (pseudobulk over all kept cells). With one dataset it scores its batch
+columns; with several, the dataset label (`match_donors: true` keeps only
+donors present in every dataset and adds a paired dataset-vs-donor
+decomposition).
+
+Cell level, overall and within each broad cell type (PCA as in `pipeline
+scanpy`): PC regression, kNN neighbourhood mixing relative to random,
+kBET-style rejection, silhouettes. Donor level (pseudobulk log-CPM per donor ×
+cell type): partial R² per term, cross-validated classifier accuracy, and the
+association of batch with each covariate. Batch, dataset and covariate metrics
+come with a null in which the label is shuffled between donors (`excess` =
+value − null mean), because batches hold whole donors. Writes `cells.tsv`,
+`cell_metrics.tsv`, `donor_metrics.tsv`, `confounding.tsv`, `summary.tsv` and
+`provenance.json`: aggregate rows only (gene set × cell type × label, never a
+donor); cell types with fewer than `min_donors` donors are left out.
+
 ### `pipeline mathys2023-for-adprs`
 ```bash
 python -m rosmap_processing pipeline mathys2023-for-adprs \
@@ -162,6 +189,16 @@ python -m rosmap_processing utils check-counts <a.h5ad> ... [--key X|raw/X|layer
 Reads the stored matrix in chunks and reports only aggregate statistics (shape,
 dtype, number of non-integer and negative values, min, max). Exits non-zero if
 any file does not hold raw counts. Safe for restricted data.
+
+### `utils obs-summary`
+```bash
+python -m rosmap_processing utils obs-summary <a.h5ad> ... --output summary.tsv [--donor-column COL]
+```
+One row per obs column: dtype, number of distinct values, % missing, and
+whether it is constant within donors (`donor`), varies within them (`cell`) or
+is `constant`, with the number of distinct values per donor. Also logs the
+stored matrices and uns keys. Never prints or writes a value, so it is safe
+for restricted data.
 
 ### `utils validate`
 ```bash

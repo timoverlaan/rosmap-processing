@@ -1,0 +1,49 @@
+# Protocol effect ROSMAP-MIT (Mathys 2023) vs Green 2024 on the donors that are
+# in both atlases (same people, so the difference is technical), matched on
+# individualID inside the job. Adds the paired dataset-vs-donor decomposition.
+#   sbatch slurm/batch_effects.sh config/batch_effects/mit_vs_green.yaml
+output_dir: data/v2/batch_effects/mit_vs_green
+max_cells_per_donor: 300
+match_donors: true
+
+datasets:
+  rosmap_mit:
+    counts: data/v2/counts/ROSMAP_MIT/combined.h5ad
+    gene_map: data/v2/reference/rosmap_mit_gene_map.tsv
+    donor: projid
+    match_on: individualID
+    celltype:
+      - {column: source_file, match: "Excitatory", label: Exc}
+      - {column: source_file, match: "Inhibitory", label: Inh}
+      - {column: source_file, match: "Astrocytes", label: Ast}
+      - {column: source_file, match: "Oligodendrocytes", label: Oli}
+      - {column: source_file, match: "OPCs", label: OPC}
+      - {column: cell_type_high_resolution, match: "^Mic", label: Mic}
+    covariates:
+      diagnosis: {column: cogdx}
+      sex: {column: msex}
+      age: {column: age_death, numeric: true}
+  rosmap_green:
+    counts: data/v2/counts/ROSMAP/combined.h5ad
+    gene_map: data/v2/reference/rosmap_green_gene_map.tsv
+    donor: individualID
+    match_on: individualID
+    celltype:
+      - {column: source_file, match: "cux2", label: Exc}
+      - {column: source_file, match: "/inhibitory", label: Inh}
+      - {column: source_file, match: "/astrocytes", label: Ast}
+      - {column: subset, match: "OPC|precursor", label: OPC}
+      - {column: source_file, match: "oligodendroglia", label: Oli}
+      - {column: source_file, match: "microglia", label: Mic}
+    covariates:
+      diagnosis: {column: cogdx}
+      sex: {column: msex}
+      age: {column: age_death, numeric: true}
+
+# Genes missing from either dataset are left out of a set (logged)
+gene_sets:
+  mit_seurat_v3_donor_2000_3way: data/v2/processed/rosmap_mit_hvg2000_3way_k30.h5ad
+  mit_seurat_v3_donor_2000: data/v2/processed/rosmap_mit_hvg2000_k30.h5ad
+  mit_seurat_donor_2000: data/v2/processed/rosmap_mit_hvg2000_postnorm_k30.h5ad
+  green_seurat_v3_donor_2000: data/v2/processed/rosmap_green_hvg2000_k30.h5ad
+  green_seurat_donor_2000: data/v2/processed/rosmap_green_hvg2000_postnorm_k30.h5ad
