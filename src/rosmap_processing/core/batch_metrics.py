@@ -288,13 +288,14 @@ def transfer_accuracy(
     else:
         folds = np.zeros(len(y_test), dtype=int)
     predicted = np.empty(len(y_test), dtype=object)
+    seed = int(rng.integers(2**31))  # PCA uses a randomized solver on wide matrices
     for fold in np.unique(folds):
         test = folds == fold
         train = ~np.isin(groups_train.astype(str), groups_test[test].astype(str))
         if len(np.unique(y_train[train])) < 2:
             return float("nan")
         n_comp = min(n_components, X_train.shape[1], int(train.sum()) - 1)
-        model = make_pipeline(StandardScaler(), PCA(n_components=n_comp),
+        model = make_pipeline(StandardScaler(), PCA(n_components=n_comp, random_state=seed),
                               LogisticRegression(max_iter=2000, class_weight="balanced"))
         predicted[test] = model.fit(X_train[train], y_train[train]).predict(X_test[test])
     return float(balanced_accuracy_score(y_test, predicted))
@@ -326,9 +327,12 @@ def classify(
     n_comp = min(n_components, X.shape[1], len(y) - len(y) // n_splits - 1)
 
     def score(target):
-        model = make_pipeline(StandardScaler(), PCA(n_components=n_comp),
+        # One draw seeds the folds and PCA's randomized solver (used on wide
+        # matrices), so results repeat and the stream is as before
+        seed = int(rng.integers(2**31))
+        model = make_pipeline(StandardScaler(), PCA(n_components=n_comp, random_state=seed),
                               LogisticRegression(max_iter=2000, class_weight="balanced"))
-        folds = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=int(rng.integers(2**31)))
+        folds = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
         return balanced_accuracy_score(target, cross_val_predict(model, X, target, cv=folds))
 
     accuracy = score(y)

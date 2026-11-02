@@ -91,6 +91,17 @@ def test_classify_above_chance(rng):
     assert n_levels == 2 and accuracy > 0.9 and chance < 0.75
 
 
+def test_classifiers_repeat_with_the_same_seed():
+    # Wide enough for PCA's randomized solver
+    rng = np.random.default_rng(0)
+    X, y = rng.normal(size=(60, 600)), np.repeat(["a", "b"], 30)
+    X[y == "b", :50] += 0.3
+    runs = [bm.classify(X, y, np.random.default_rng(5)) for _ in range(2)]
+    assert runs[0] == runs[1]
+    runs = [bm.transfer_accuracy(X, y, X[::-1], y[::-1], np.random.default_rng(5)) for _ in range(2)]
+    assert runs[0] == runs[1]
+
+
 def test_cramers_v_and_eta_squared(rng):
     a = np.repeat(["x", "y"], 100)
     v, p = bm.cramers_v(a, a)
