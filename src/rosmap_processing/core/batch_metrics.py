@@ -123,10 +123,11 @@ def mixing_ratio(knn: np.ndarray, labels) -> Tuple[float, float]:
     """Local label diversity relative to random mixing, and the raw local index.
 
     For each cell, the inverse Simpson index of the labels among its k
-    neighbours (as in LISI, with equal neighbour weights). Divided by its
-    expected value if the neighbours were drawn at random from all cells, so
-    1 means as mixed as random, and 1 / (expected index) means every
-    neighbourhood holds a single label.
+    neighbours (as in LISI, with equal neighbour weights). Divided by the
+    inverse of the expected Simpson index if the neighbours were drawn at
+    random from all cells, so about 1 means as mixed as random (a little above
+    for rare labels), and 1 / (that value) means every neighbourhood holds a
+    single label.
     """
     codes, n_levels = _codes(labels)
     k = knn.shape[1]
@@ -289,23 +290,33 @@ def eta_squared(values, groups) -> Tuple[float, float]:
 
 def paired_decomposition(A: np.ndarray, B: np.ndarray) -> Dict[str, float]:
     """For the same donors (rows) measured in two datasets, per gene (column):
-    the shares of variance between datasets, between donors, and left over
-    (donor x dataset), plus the correlation of donor differences between the
-    datasets. Returns medians over genes."""
+    the variance components of a two-way layout without replication, as
+    shares of their sum: between datasets, between donors (shared by both
+    datasets), and donor x dataset plus noise; and the correlation of donor
+    differences between the datasets. Returns medians over genes.
+
+    The components come from the expected mean squares (donor: MS_donor =
+    var_residual + 2 var_donor), not the raw sums of squares, whose donor part
+    is half the within-dataset variance even when donors share nothing."""
     A, B = np.asarray(A, dtype=np.float64), np.asarray(B, dtype=np.float64)
     n = A.shape[0]
     grand = (A.mean(axis=0) + B.mean(axis=0)) / 2
     total = ((A - grand) ** 2).sum(axis=0) + ((B - grand) ** 2).sum(axis=0)
     ss_dataset = n * ((A.mean(axis=0) - grand) ** 2 + (B.mean(axis=0) - grand) ** 2)
     ss_donor = 2 * (((A + B) / 2 - grand) ** 2).sum(axis=0)
-    ok = total > 0
+    ms_residual = (total - ss_dataset - ss_donor) / (n - 1)
+    var_dataset = np.maximum(ss_dataset - ms_residual, 0) / (2 * n)
+    var_donor = np.maximum(ss_donor / (n - 1) - ms_residual, 0) / 2
+    var_residual = np.maximum(ms_residual, 0)
+    var_total = var_dataset + var_donor + var_residual
+    ok = var_total > 0
     a, b = A - A.mean(axis=0), B - B.mean(axis=0)
     denom = np.sqrt((a ** 2).sum(axis=0) * (b ** 2).sum(axis=0))
     corr = np.divide((a * b).sum(axis=0), denom, out=np.full(A.shape[1], np.nan), where=denom > 0)
     return {
-        "share_dataset": float(np.median(ss_dataset[ok] / total[ok])),
-        "share_donor": float(np.median(ss_donor[ok] / total[ok])),
-        "share_residual": float(np.median(1 - (ss_dataset[ok] + ss_donor[ok]) / total[ok])),
+        "share_dataset": float(np.median(var_dataset[ok] / var_total[ok])),
+        "share_donor": float(np.median(var_donor[ok] / var_total[ok])),
+        "share_residual": float(np.median(var_residual[ok] / var_total[ok])),
         "donor_correlation": float(np.nanmedian(corr)),
     }
 

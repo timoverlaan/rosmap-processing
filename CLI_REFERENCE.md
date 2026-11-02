@@ -157,7 +157,11 @@ scanpy`, samples up to 300 cells per donor, and reads the matrix once in row
 chunks (pseudobulk over all kept cells). With one dataset it scores its batch
 columns; with several, the dataset label (`match_donors: true` keeps only
 donors present in every dataset and adds a paired dataset-vs-donor
-decomposition).
+decomposition: variance components and the correlation of each donor's
+deviation between the datasets). With several datasets the cell-level metrics
+use a balanced sample (`balance_datasets`, default on): within each cell type
+the same number of cells per dataset and per donor, so the larger dataset does
+not dominate the neighbourhoods (`cells_balanced` in `cells.tsv`).
 
 Cell level, overall and within each broad cell type (PCA as in `pipeline
 scanpy`): PC regression, kNN neighbourhood mixing relative to random,

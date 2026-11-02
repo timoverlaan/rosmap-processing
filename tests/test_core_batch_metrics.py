@@ -112,3 +112,8 @@ def test_paired_decomposition(rng):
     assert out["donor_correlation"] > 0.9
     assert 0.02 < out["share_dataset"] < 0.3
     assert abs(sum(out[k] for k in ("share_dataset", "share_donor", "share_residual")) - 1) < 0.1
+    # No donor effect shared by the datasets: no donor share (the raw sums of
+    # squares would give half the variance to donors)
+    out = bm.paired_decomposition(rng.normal(size=(n, g)), rng.normal(size=(n, g)))
+    assert out["share_donor"] < 0.1
+    assert abs(out["donor_correlation"]) < 0.1

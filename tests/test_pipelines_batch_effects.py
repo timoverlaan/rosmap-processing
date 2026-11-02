@@ -148,6 +148,8 @@ def test_matched_donors_across_datasets(tmp_path):
     out = run_batch_effects(spec)
     cells = pd.read_csv(out / "cells.tsv", sep="\t").set_index(["dataset", "celltype"])
     assert cells.loc[("b", "all"), "donors_sampled"] == 8
+    assert cells.loc[("a", "Exc"), "cells_balanced"] == cells.loc[("b", "Exc"), "cells_balanced"] > 0
+    assert cells.loc[("a", "Exc"), "donors_balanced"] == cells.loc[("b", "Exc"), "donors_balanced"]
     m = pd.read_csv(out / "cell_metrics.tsv", sep="\t")
     pcr = m[(m["label"] == "dataset") & (m["metric"] == "pc_regression") & (m["celltype"] == "mean")]
     assert pcr["excess"].item() > 0.05
@@ -161,7 +163,7 @@ def test_matched_donors_across_datasets(tmp_path):
 def test_different_donors_across_datasets(tmp_path):
     rng = np.random.default_rng(3)
     donors_a = [f"R{400 + i}" for i in range(8)]
-    donors_b = [f"H{500 + i}" for i in range(8)]
+    donors_b = [f"H{500 + i}" for i in range(5)]  # fewer: balanced for the cell-level metrics
     names = _counts(tmp_path / "a.h5ad", rng, donors_a, {d: "B1" for d in donors_a})
     _counts(tmp_path / "b.h5ad", rng, donors_b, {d: "B1" for d in donors_b}, dataset_shift=True,
             layer="UMIs")
@@ -176,6 +178,14 @@ def test_different_donors_across_datasets(tmp_path):
     m = pd.read_csv(out / "cell_metrics.tsv", sep="\t")
     pcr = m[(m["label"] == "dataset") & (m["metric"] == "pc_regression") & (m["celltype"] == "mean")]
     assert pcr["excess"].item() > 0.05
+    cells = pd.read_csv(out / "cells.tsv", sep="\t").set_index(["dataset", "celltype"])
+    for t in ("Exc", "Ast"):
+        a, b = cells.loc[("a", t)], cells.loc[("b", t)]
+        assert a["cells_balanced"] == b["cells_balanced"] > 0
+        assert a["donors_balanced"] == b["donors_balanced"] <= 5
+        assert a["cells_balanced"] % a["donors_balanced"] == 0
+    exc = m[(m["label"] == "dataset") & (m["metric"] == "pc_regression") & (m["celltype"] == "Exc")]
+    assert exc["n_cells"].item() == 2 * cells.loc[("a", "Exc"), "cells_balanced"]
     d = pd.read_csv(out / "donor_metrics.tsv", sep="\t")
     accuracy = d[(d["label"] == "dataset") & (d["metric"] == "balanced_accuracy") & (d["celltype"] == "mean")]
     assert accuracy["value"].item() > 0.9

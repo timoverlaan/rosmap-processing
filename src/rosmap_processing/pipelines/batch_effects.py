@@ -19,7 +19,10 @@ with the same normalization:
 One dataset: its technical batch columns, against donor, cell type and the
 donor covariates. Several: the dataset label within each broad cell type; with
 match_donors, only donors present in every dataset (matched on `match_on`),
-plus the paired dataset-vs-donor decomposition.
+plus the paired dataset-vs-donor decomposition. With several datasets the
+cell-level metrics use a balanced part of the sample (balance_datasets): within
+each cell type the same number of cells from every dataset, and from each of
+their donors, so the larger dataset does not dominate the neighbourhoods.
 
 A batch that holds whole donors also carries their differences, so every
 batch, dataset and covariate metric comes with a null (`null_type`): the same
@@ -32,7 +35,8 @@ classifier). `excess` = value - null mean.
 Outputs in the spec's output_dir. All are aggregates: rows are gene sets x
 cell types x labels, never donors; cell types with fewer than min_donors
 donors (in any dataset) are left out.
-    cells.tsv          cells and donors per dataset and cell type
+    cells.tsv          cells and donors per dataset and cell type (kept,
+                       sampled, and balanced for the cell-level metrics)
     cell_metrics.tsv   PC regression, neighbourhood mixing, kBET-style
                        rejection, silhouettes
     donor_metrics.tsv  pseudobulk partial R², classifier accuracy, paired
@@ -91,6 +95,7 @@ DEFAULTS: Dict[str, Any] = {
     "min_cells_per_pseudobulk": 10,
     "max_cells_silhouette": 10000,
     "match_donors": False,
+    "balance_datasets": True,
     "chunk_size": 50000,
 }
 REQUIRED = ("output_dir", "datasets", "gene_sets")
@@ -301,6 +306,46 @@ def subsample(ds: Dataset, max_per_donor: int, rng: np.random.Generator) -> None
     rank = shuffled.groupby("donor", sort=False).cumcount().to_numpy()
     ds.sample = shuffled[rank < max_per_donor].sort_values("row").reset_index(drop=True)
     logger.info(f"[{ds.name}] sampled {len(ds.sample)} cells (up to {max_per_donor} per donor)")
+
+
+def balance_datasets(cells: pd.DataFrame, celltypes: List[str], matched: bool, min_donors: int,
+                     rng: np.random.Generator) -> np.ndarray:
+    """Positions in `cells` (the pooled sample of several datasets) for the
+    cell-level metrics: within each cell type, every dataset gets the same
+    number of cells, m from each of its donors. With matched donors these are
+    the donors with at least m cells in every dataset; otherwise the same
+    number of donors per dataset, drawn from those with at least m cells. m is
+    the value that keeps the most cells. The larger dataset then does not
+    dominate the neighbourhoods, and since every donor has the same weight,
+    shuffling the dataset between (or within) donors keeps the split."""
+    keep = []
+    datasets = cells["dataset"].to_numpy()
+    donors = cells["donor"].to_numpy()
+    for t in celltypes:
+        part = np.flatnonzero(cells["celltype"].to_numpy() == t)
+        counts = cells.iloc[part].groupby(["donor", "dataset"]).size().unstack("dataset", fill_value=0)
+        best_cells, m = 0, 0
+        for candidate in np.unique(counts.to_numpy()):
+            enough = counts >= candidate
+            n = int(enough.all(axis=1).sum()) if matched else int(enough.sum(axis=0).min())
+            if candidate > 0 and n >= min_donors and n * candidate > best_cells:
+                best_cells, m = n * candidate, int(candidate)
+        if not m:
+            logger.warning(f"{t}: cannot balance the datasets with >= {min_donors} donors (left out)")
+            continue
+        enough = counts >= m
+        if matched:
+            chosen = {ds: counts.index[enough.all(axis=1)] for ds in counts.columns}
+        else:
+            n = int(enough.sum(axis=0).min())
+            chosen = {ds: rng.choice(counts.index[enough[ds]], size=n, replace=False) for ds in counts.columns}
+        for ds, picked in chosen.items():
+            rows = part[(datasets[part] == ds) & np.isin(donors[part], picked)]
+            for members in pd.Series(rows).groupby(donors[rows]).agg(list):
+                keep.append(rng.choice(members, size=m, replace=False))
+        logger.info(f"{t}: {m} cells from each of {len(next(iter(chosen.values())))} donors per dataset "
+                    f"for the cell-level metrics")
+    return np.sort(np.concatenate(keep)) if keep else np.array([], dtype=int)
 
 
 def stream_counts(ds: Dataset, chunk_size: int) -> None:
@@ -610,7 +655,8 @@ def _celltypes_to_analyse(datasets: List[Dataset], min_donors: int) -> List[str]
     return sorted(keep)
 
 
-def _cells_table(datasets: List[Dataset], celltypes: List[str]) -> pd.DataFrame:
+def _cells_table(datasets: List[Dataset], celltypes: List[str],
+                 balanced: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     rows = []
     for ds in datasets:
         rows.append({"dataset": ds.name, "celltype": "all", **ds.stats,
@@ -621,6 +667,13 @@ def _cells_table(datasets: List[Dataset], celltypes: List[str]) -> pd.DataFrame:
                          "donors_kept": cells["donor"].nunique(), "cells_sampled": len(sample),
                          "donors_sampled": sample["donor"].nunique()})
     table = pd.DataFrame(rows)
+    if balanced is not None:
+        for i, row in table.iterrows():
+            part = balanced[balanced["dataset"] == row["dataset"]]
+            if row["celltype"] != "all":
+                part = part[part["celltype"] == row["celltype"]]
+            table.loc[i, "cells_balanced"] = len(part)
+            table.loc[i, "donors_balanced"] = part["donor"].nunique()
     counts = table.columns.drop(["dataset", "celltype"])
     table[counts] = table[counts].astype("Int64")
     return table
@@ -708,13 +761,20 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
 
     celltypes = _celltypes_to_analyse(datasets, spec["min_donors"])
     logger.info(f"Cell types with >= {spec['min_donors']} donors in every dataset: {celltypes}")
-    _cells_table(datasets, celltypes).to_csv(out / "cells.tsv", sep="\t", index=False)
+    matched = spec["match_donors"] and not single
+    # Several datasets: the cell-level metrics use a sample with equal cells
+    # per dataset (and per donor) within each cell type.
+    cell_idx = balance_datasets(sample, celltypes, matched, spec["min_donors"], rng) \
+        if not single and spec["balance_datasets"] else None
+    cell_sample = sample if cell_idx is None else sample.iloc[cell_idx].reset_index(drop=True)
+    cell_celltypes = [t for t in celltypes if (cell_sample["celltype"] == t).any()]
+    _cells_table(datasets, celltypes, None if cell_idx is None else cell_sample).to_csv(
+        out / "cells.tsv", sep="\t", index=False)
 
     # One row per dataset x donor. With matched donors every donor is in every
     # dataset, so the dataset cannot be confounded with a donor covariate.
     donor_cols = [g for g in groupers if g.startswith("batch:")] + covariate_names
     donors = pd.concat([_donor_table(ds, donor_cols) for ds in datasets], ignore_index=True)
-    matched = spec["match_donors"] and not single
     confounding = pd.DataFrame(columns=CONFOUNDING_COLUMNS) if matched else \
         _confounding(donors, groupers, covariates)
     confounding.to_csv(out / "confounding.tsv", sep="\t", index=False, float_format="%.4g")
@@ -728,7 +788,9 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
             log_normalize(ds.counts[:, positions[ds.name]], ds.totals, spec["target_sum"]).toarray()
             for ds in datasets
         ])
-        rows = cell_metrics(gs, X, sample, labels, celltypes, spec, rng)
+        if cell_idx is not None:
+            X = X[cell_idx]
+        rows = cell_metrics(gs, X, cell_sample, labels, cell_celltypes, spec, rng)
         cell_rows += [{**r, "n_genes": n_genes} for r in rows]
         del X
 
