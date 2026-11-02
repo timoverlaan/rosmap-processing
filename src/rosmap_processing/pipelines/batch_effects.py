@@ -42,7 +42,12 @@ donors (in any dataset) are left out.
     donor_metrics.tsv  pseudobulk partial R², classifier accuracy, paired
                        decomposition
     confounding.tsv    association of batch (or dataset) with the covariates
-    summary.tsv        the rows of both metric tables for all cells / the
+    disease.tsv        with a `disease` label per dataset: per-gene disease
+                       tests (adjusted for `disease_adjust`), classifier
+                       accuracy within each dataset, and between datasets
+                       the correlation of the disease effects and the
+                       accuracy of a classifier fitted on the other dataset
+    summary.tsv        the rows of the metric tables for all cells / the
                        mean over cell types
     provenance.json    the spec, gene set sizes and code version
 """
@@ -96,11 +101,13 @@ DEFAULTS: Dict[str, Any] = {
     "max_cells_silhouette": 10000,
     "match_donors": False,
     "balance_datasets": True,
+    "disease_adjust": [],
     "chunk_size": 50000,
 }
 REQUIRED = ("output_dir", "datasets", "gene_sets")
 CONFOUNDING_COLUMNS = ["grouping", "covariate", "metric", "value", "p_value", "n_donors", "n_groups"]
-DATASET_KEYS = {"counts", "layer", "gene_map", "donor", "match_on", "celltype", "batch", "covariates"}
+DATASET_KEYS = {"counts", "layer", "gene_map", "donor", "match_on", "celltype", "batch", "covariates",
+                "disease"}
 
 
 # ---------------------------------------------------------------- spec
@@ -128,6 +135,13 @@ def load_spec(path: Union[str, Path]) -> Dict[str, Any]:
         cfg.setdefault("covariates", {})
         if spec["match_donors"] and not cfg.get("match_on"):
             raise ValueError(f"match_donors needs 'match_on' for dataset {name}")
+    with_disease = [bool(cfg.get("disease")) for cfg in spec["datasets"].values()]
+    if any(with_disease) and not all(with_disease):
+        raise ValueError("'disease' must be given for every dataset or none")
+    for name, cfg in spec["datasets"].items():
+        missing = set(spec["disease_adjust"]) - set(cfg["covariates"])
+        if missing:
+            raise ValueError(f"disease_adjust names covariates that dataset {name} lacks: {sorted(missing)}")
     if len(spec["datasets"]) > 1 and any(cfg["batch"] for cfg in spec["datasets"].values()):
         logger.warning("Batch columns are only analysed with a single dataset; ignoring them")
     return spec
@@ -228,6 +242,8 @@ def prepare_dataset(name: str, cfg: Dict[str, Any], spec: Dict[str, Any]) -> Dat
     covariates = cfg["covariates"]
     columns = {cfg["donor"], *cfg["batch"], *(r["column"] for r in cfg["celltype"]),
                *(c["column"] for c in covariates.values())}
+    if cfg.get("disease"):
+        columns.add(cfg["disease"]["column"])
     if cfg.get("match_on"):
         columns.add(cfg["match_on"])
 
@@ -270,6 +286,8 @@ def prepare_dataset(name: str, cfg: Dict[str, Any], spec: Dict[str, Any]) -> Dat
         values = _as_numeric(raw[cov["column"]]) if cov.get("numeric") else \
             _as_labels(raw[cov["column"]], cov.get("recode"))
         cells[key] = values[rows]
+    if cfg.get("disease"):
+        cells["disease"] = _as_labels(raw[cfg["disease"]["column"]], cfg["disease"].get("recode"))[rows]
     if cfg.get("match_on"):
         cells["match"] = _as_labels(raw[cfg["match_on"]])[rows]
     stats["cells_kept"] = len(cells)
@@ -278,7 +296,8 @@ def prepare_dataset(name: str, cfg: Dict[str, Any], spec: Dict[str, Any]) -> Dat
     for t, count in cells["celltype"].value_counts().items():
         logger.info(f"[{name}]   {t}: {count} cells")
     # Counts only, so a recode map that matches nothing shows up here
-    for column in [f"batch:{c}" for c in cfg["batch"]] + list(covariates):
+    for column in [f"batch:{c}" for c in cfg["batch"]] + list(covariates) + \
+            (["disease"] if cfg.get("disease") else []):
         with_value = cells.loc[cells[column].notna(), "donor"].nunique()
         logger.info(f"[{name}]   {column}: {with_value} of {stats['donors_kept']} donors have a value, "
                     f"{cells[column].nunique()} distinct")
@@ -624,6 +643,92 @@ def _paired_rows(gs: str, celltype: str, table: pd.DataFrame, Y: np.ndarray, spe
     return rows
 
 
+def _zscore(Y: np.ndarray) -> np.ndarray:
+    sd = Y.std(axis=0)
+    return (Y - Y.mean(axis=0)) / np.where(sd > 0, sd, 1.0)
+
+
+def disease_metrics(gs: str, table: pd.DataFrame, Y: np.ndarray, adjust: Dict[str, Label],
+                    celltype: str, spec, rng) -> List[Dict[str, Any]]:
+    """Disease signal in the pseudobulk of one cell type (rows: donor x dataset).
+
+    Per dataset: the per-gene disease t statistic, adjusted for `adjust`
+    (share of genes at FDR < 0.05, mean t²), and the cross-validated
+    classifier accuracy. Per pair of datasets: the correlation of the t
+    statistics, and the accuracy of a classifier fitted on one dataset on the
+    other, standardized on the training data (as deployed) or each dataset on
+    its own (after removing per-gene shifts and scales). Nulls shuffle the
+    disease label between donors (of the training dataset for transfer)."""
+    rows: List[Dict[str, Any]] = []
+    base = dict(gene_set=gs, celltype=celltype)
+    numeric = [k for k, label in adjust.items() if label.numeric]
+    fits = {}
+    for name in dict.fromkeys(table["dataset"]):
+        sel = ((table["dataset"] == name) & table["disease"].notna()).to_numpy()
+        for label in adjust.values():
+            sel &= table[label.column].notna().to_numpy()
+        sub = table[sel]
+        counts = sub["disease"].value_counts()
+        if len(counts) < 2 or counts.min() < 3:
+            continue
+        covs = sub[["disease"] + [label.column for label in adjust.values()]]
+        covs.columns = ["disease"] + list(adjust)
+        X, columns = bm.design_matrix(covs, numeric)
+        j = int(columns["disease"][0])
+        Ys = Y[sel]
+        share, mean_t2, t = bm.association(Ys, X, j)
+        nulls = []
+        for _ in range(spec["n_permutations"]):
+            Xp = X.copy()
+            Xp[:, j] = rng.permutation(X[:, j])
+            nulls.append(bm.association(Ys, Xp, j)[:2])
+        extra = dict(n_donors=len(sub), n_positive=int((X[:, j] == 1).sum()), null_type="between")
+        for i, (metric, value) in enumerate([("de_share_fdr05", share), ("de_mean_t2", mean_t2)]):
+            null_mean, null_sd = bm.null_summary([n[i] for n in nulls])
+            rows.append(_row(**base, label=name, metric=metric, value=value,
+                             null_mean=null_mean, null_sd=null_sd, **extra))
+        accuracy, chance, _ = bm.classify(Ys, sub["disease"].to_numpy(), rng)
+        if np.isfinite(accuracy):
+            rows.append(_row(**base, label=name, metric="within_accuracy", value=accuracy,
+                             null_mean=chance, null_sd=np.nan, **extra))
+        fits[name] = dict(Y=Ys, y=sub["disease"].to_numpy(), donors=sub["donor"].to_numpy(),
+                          X=X, j=j, t=t)
+
+    for a, b in combinations(fits, 2):
+        ta, tb = fits[a]["t"], fits[b]["t"]
+        if (np.isfinite(ta) & np.isfinite(tb)).sum() < 3:
+            continue
+
+        def corr(t, tb=tb):
+            ok = np.isfinite(t) & np.isfinite(tb)
+            return float(np.corrcoef(t[ok], tb[ok])[0, 1])
+
+        nulls = []
+        for _ in range(spec["n_permutations"]):
+            Xp = fits[a]["X"].copy()
+            Xp[:, fits[a]["j"]] = rng.permutation(Xp[:, fits[a]["j"]])
+            nulls.append(corr(bm.coefficient_t(fits[a]["Y"], Xp, fits[a]["j"])))
+        null_mean, null_sd = bm.null_summary(nulls)
+        rows.append(_row(**base, label=f"{a} vs {b}", metric="t_correlation", value=corr(ta),
+                         null_mean=null_mean, null_sd=null_sd, null_type="between",
+                         n_donors=len(fits[a]["y"]) + len(fits[b]["y"])))
+
+    for a, b in combinations(fits, 2):
+        for src, dst in ((a, b), (b, a)):
+            s, d = fits[src], fits[dst]
+            for metric, (Xs, Xd) in (("transfer_accuracy", (s["Y"], d["Y"])),
+                                     ("transfer_accuracy_rescaled", (_zscore(s["Y"]), _zscore(d["Y"])))):
+                score = lambda y: bm.transfer_accuracy(Xs, y, Xd, d["y"], rng, s["donors"], d["donors"])
+                value = score(s["y"])
+                if not np.isfinite(value):
+                    continue
+                null_mean, null_sd = bm.null_summary([score(rng.permutation(s["y"])) for _ in range(5)])
+                rows.append(_row(**base, label=f"{src} -> {dst}", metric=metric, value=value,
+                                 null_mean=null_mean, null_sd=null_sd, null_type="between",
+                                 n_donors=len(d["y"]), n_positive=int((d["X"][:, d["j"]] == 1).sum())))
+    return rows
+
+
 def _mean_rows(rows: List[Dict[str, Any]], weight: str) -> List[Dict[str, Any]]:
     """Per gene set, label and metric: the mean over cell types, weighted by `weight`."""
     df = pd.DataFrame([r for r in rows if r["celltype"] != "all"])
@@ -712,6 +817,8 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
         raise FileExistsError(f"{out}/summary.tsv exists (pass --overwrite to replace it)")
     out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(spec["seed"])
+    # A separate stream, so the other tables do not depend on the disease metrics
+    disease_rng = np.random.default_rng([spec["seed"], 1])
     logger.info(f"Batch effects '{spec['name']}' -> {out}")
 
     datasets = [prepare_dataset(name, cfg, spec) for name, cfg in spec["datasets"].items()]
@@ -758,6 +865,12 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
         labels["dataset"] = Label("dataset", null="within" if spec["match_donors"] else "between",
                                   mixing=True)
     labels.update(covariates)
+    has_disease = bool(datasets[0].cfg.get("disease"))
+    if has_disease:
+        levels = set().union(*(set(ds.cells["disease"].dropna()) for ds in datasets))
+        if len(levels) != 2:
+            raise ValueError(f"The disease label needs exactly 2 values across the datasets, not {len(levels)}")
+    adjust = {k: covariates[k] for k in spec["disease_adjust"]}
 
     celltypes = _celltypes_to_analyse(datasets, spec["min_donors"])
     logger.info(f"Cell types with >= {spec['min_donors']} donors in every dataset: {celltypes}")
@@ -773,7 +886,8 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
 
     # One row per dataset x donor. With matched donors every donor is in every
     # dataset, so the dataset cannot be confounded with a donor covariate.
-    donor_cols = [g for g in groupers if g.startswith("batch:")] + covariate_names
+    donor_cols = [g for g in groupers if g.startswith("batch:")] + covariate_names + \
+        (["disease"] if has_disease else [])
     donors = pd.concat([_donor_table(ds, donor_cols) for ds in datasets], ignore_index=True)
     confounding = pd.DataFrame(columns=CONFOUNDING_COLUMNS) if matched else \
         _confounding(donors, groupers, covariates)
@@ -781,6 +895,7 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
 
     cell_rows: List[Dict[str, Any]] = []
     donor_rows: List[Dict[str, Any]] = []
+    disease_rows: List[Dict[str, Any]] = []
     for gs, positions in gene_sets.items():
         t0 = time.time()
         n_genes = len(next(iter(positions.values())))
@@ -811,6 +926,9 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
                 donor_rows += [{**r, "n_genes": n_genes} for r in _paired_rows(gs, t, table, Y, spec)]
             rows = donor_metrics(gs, table, Y, terms, targets, t, spec, rng)
             donor_rows += [{**r, "n_genes": n_genes} for r in rows]
+            if has_disease:
+                rows = disease_metrics(gs, table, Y, adjust, t, spec, disease_rng)
+                disease_rows += [{**r, "n_genes": n_genes} for r in rows]
         logger.info(f"Gene set {gs} ({n_genes} genes) done in {time.time() - t0:.0f} s")
 
     cell_rows += _mean_rows(cell_rows, "n_cells")
@@ -818,9 +936,14 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
     cell_df, donor_df = pd.DataFrame(cell_rows), pd.DataFrame(donor_rows)
     cell_df.to_csv(out / "cell_metrics.tsv", sep="\t", index=False, float_format="%.4g")
     donor_df.to_csv(out / "donor_metrics.tsv", sep="\t", index=False, float_format="%.4g")
+    disease_rows += _mean_rows(disease_rows, "n_donors")
+    disease_df = pd.DataFrame(disease_rows)
+    if has_disease:
+        disease_df.to_csv(out / "disease.tsv", sep="\t", index=False, float_format="%.4g")
     summary = pd.concat([
         cell_df[cell_df["celltype"].isin(["all", "mean"])].assign(level="cells"),
         donor_df[donor_df["celltype"] == "mean"].assign(level="donors") if len(donor_df) else None,
+        disease_df[disease_df["celltype"] == "mean"].assign(level="disease") if len(disease_df) else None,
     ], ignore_index=True)
     columns = ["gene_set", "level", "celltype", "label", "metric", "value", "null_mean", "excess"]
     summary[[c for c in columns if c in summary.columns]].to_csv(

@@ -102,6 +102,39 @@ def test_cramers_v_and_eta_squared(rng):
     assert eta2 > 0.6 and p < 1e-10
 
 
+def test_association_finds_the_term(rng):
+    n = 60
+    disease = np.repeat([0.0, 1.0], n // 2)
+    Y = rng.normal(size=(n, 100))
+    Y[:, :20] += 1.5 * disease[:, None]
+    X = np.column_stack([np.ones(n), disease, rng.normal(size=n)])
+    share, mean_t2, t = bm.association(Y, X, 1)
+    assert 0.15 < share <= 0.25 and mean_t2 > 3
+    assert (t[:20] > 0).all()
+    share, mean_t2, _ = bm.association(Y[:, 20:], X, 1)
+    assert share < 0.05 and mean_t2 < 2
+    assert np.allclose(bm.bh_fdr(np.array([0.01, 0.04, 0.03])), [0.03, 0.04, 0.04])
+
+
+def test_transfer_accuracy_and_shared_donors(rng):
+    n, g = 60, 30
+    y = np.repeat(["no", "yes"], n // 2)
+    signal = (y == "yes")[:, None] * np.r_[np.full(5, 2.0), np.zeros(g - 5)]
+    A = signal + rng.normal(size=(n, g))
+    B = signal + rng.normal(size=(n, g))
+    assert bm.transfer_accuracy(A, y, B, y, rng) > 0.8
+    # Random labels on the same donors measured twice: a model that saw the
+    # donor would recognise it; scored on held-out donors it is near chance
+    rng = np.random.default_rng(1)
+    n, g = 40, 30
+    noise = rng.normal(size=(n, g))
+    labels = rng.permutation(np.repeat(["no", "yes"], n // 2))
+    donors = np.arange(n)
+    leaky = bm.transfer_accuracy(noise, labels, noise, labels, rng)
+    held_out = bm.transfer_accuracy(noise, labels, noise, labels, rng, donors, donors)
+    assert leaky > 0.9 and held_out < 0.75
+
+
 def test_paired_decomposition(rng):
     n, g = 50, 40
     donor = rng.normal(scale=2, size=(n, g))

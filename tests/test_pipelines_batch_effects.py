@@ -15,9 +15,11 @@ N_GENES = 80
 BATCH_GENES = range(0, 10)       # up in batch B2
 CELLTYPE_GENES = range(10, 30)   # up in astrocytes
 DATASET_GENES = range(30, 40)    # up in the second dataset
+DISEASE_GENES = range(40, 50)    # up in donors with cogdx 4 (the even ones), if disease_effect
 
 
-def _counts(path, rng, donors, batch_of, dataset_shift=False, cells_per_type=60, layer=None):
+def _counts(path, rng, donors, batch_of, dataset_shift=False, cells_per_type=60, layer=None,
+            disease_effect=False):
     """batch_of: donor -> batch (whole donors per batch), or a list of batches
     that each cell is assigned to at random (pooled libraries)."""
     rates = rng.gamma(1.0, 1.0, size=N_GENES)
@@ -33,6 +35,8 @@ def _counts(path, rng, donors, batch_of, dataset_shift=False, cells_per_type=60,
             r[np.ix_(batch == "B2", list(BATCH_GENES))] *= 5
             if dataset_shift:
                 r[:, list(DATASET_GENES)] *= 5
+            if disease_effect and d % 2 == 0:
+                r[:, list(DISEASE_GENES)] *= 3
             depth = rng.uniform(0.5, 2.0, size=(cells_per_type, 1))
             blocks.append(rng.poisson(r * depth))
             obs.append(pd.DataFrame({
@@ -70,6 +74,7 @@ COVARIATES = {
     "age": {"column": "age_death", "numeric": True},
     "pmi": {"column": "pmi", "numeric": True},
 }
+DISEASE = {"column": "cogdx", "recode": {"1": "no", "4": "yes"}}
 SETTINGS = dict(seed=1, max_cells_per_donor=80, min_genes=1, min_cells_per_donor=50, n_pcs=10,
                 k_neighbors=10, n_permutations=4, min_donors=3, min_cells_per_pseudobulk=5,
                 max_cells_silhouette=500, chunk_size=300)
@@ -96,6 +101,7 @@ def test_within_dataset_finds_the_batch_effect(tmp_path):
     spec = _write_spec(tmp_path, "within", {"one": {
         "counts": [str(tmp_path / "missing.h5ad"), str(tmp_path / "counts.h5ad")],
         "donor": "projid", "celltype": CELLTYPES, "batch": ["batch"], "covariates": COVARIATES,
+        "disease": DISEASE,
     }}, {"with batch genes": str(tmp_path / "with_batch_genes.txt"),
          "without batch genes": str(tmp_path / "without_batch_genes.txt")})
 
@@ -120,6 +126,9 @@ def test_within_dataset_finds_the_batch_effect(tmp_path):
     conf = pd.read_csv(out / "confounding.tsv", sep="\t")
     assert set(conf["covariate"]) == {"diagnosis", "sex", "age", "pmi"}
     assert (pd.read_csv(out / "summary.tsv", sep="\t")["gene_set"].nunique()) == 2
+    dis = pd.read_csv(out / "disease.tsv", sep="\t")
+    assert set(dis["label"]) == {"one"}  # one dataset: no correlation or transfer rows
+    assert {"de_share_fdr05", "de_mean_t2", "within_accuracy"} <= set(dis["metric"])
 
     # Aggregates only: no donor ID appears in any output
     text = _all_output_text(out)
@@ -134,14 +143,14 @@ def test_matched_donors_across_datasets(tmp_path):
     rng = np.random.default_rng(1)
     donors = [f"R{200 + i}" for i in range(8)]
     batch_of = {d: "B1" for d in donors}
-    names = _counts(tmp_path / "a.h5ad", rng, donors, batch_of)
+    names = _counts(tmp_path / "a.h5ad", rng, donors, batch_of, disease_effect=True)
     # The second dataset has two extra donors that must be left out, and a shift
     _counts(tmp_path / "b.h5ad", rng, donors + ["R998", "R999"],
-            {**batch_of, "R998": "B1", "R999": "B1"}, dataset_shift=True)
+            {**batch_of, "R998": "B1", "R999": "B1"}, dataset_shift=True, disease_effect=True)
     _gene_files(tmp_path, list(names))
     dataset = lambda f: {"counts": str(tmp_path / f), "gene_map": str(tmp_path / "map.tsv"),
                          "donor": "projid", "match_on": "individualID", "celltype": CELLTYPES,
-                         "covariates": COVARIATES}
+                         "covariates": COVARIATES, "disease": DISEASE}
     spec = _write_spec(tmp_path, "matched", {"a": dataset("a.h5ad"), "b": dataset("b.h5ad")},
                        {"ensembl": str(tmp_path / "ensembl.txt")}, match_donors=True)
 
@@ -157,22 +166,25 @@ def test_matched_donors_across_datasets(tmp_path):
     paired = d[(d["label"] == "a vs b") & (d["celltype"] == "Exc")].set_index("metric")["value"]
     assert {"share_dataset", "share_donor", "share_residual", "donor_correlation"} <= set(paired.index)
     assert paired["share_dataset"] > 0
+    # The same donors in both: transfer is scored on donors left out of the fit
+    dis = pd.read_csv(out / "disease.tsv", sep="\t").set_index(["celltype", "label", "metric"])
+    assert ("Exc", "a -> b", "transfer_accuracy_rescaled") in dis.index
     assert not any(donor in _all_output_text(out) for donor in donors)
 
 
 def test_different_donors_across_datasets(tmp_path):
     rng = np.random.default_rng(3)
-    donors_a = [f"R{400 + i}" for i in range(8)]
-    donors_b = [f"H{500 + i}" for i in range(5)]  # fewer: balanced for the cell-level metrics
-    names = _counts(tmp_path / "a.h5ad", rng, donors_a, {d: "B1" for d in donors_a})
+    donors_a = [f"R{400 + i}" for i in range(10)]
+    donors_b = [f"H{500 + i}" for i in range(6)]  # fewer: balanced for the cell-level metrics
+    names = _counts(tmp_path / "a.h5ad", rng, donors_a, {d: "B1" for d in donors_a}, disease_effect=True)
     _counts(tmp_path / "b.h5ad", rng, donors_b, {d: "B1" for d in donors_b}, dataset_shift=True,
-            layer="UMIs")
+            layer="UMIs", disease_effect=True)
     _gene_files(tmp_path, list(names))
     dataset = lambda f, **kw: {"counts": str(tmp_path / f), "gene_map": str(tmp_path / "map.tsv"),
                                "donor": "individualID", "celltype": CELLTYPES,
-                               "covariates": COVARIATES, **kw}
+                               "covariates": COVARIATES, "disease": DISEASE, **kw}
     spec = _write_spec(tmp_path, "across", {"a": dataset("a.h5ad"), "b": dataset("b.h5ad", layer="UMIs")},
-                       {"ensembl": str(tmp_path / "ensembl.txt")})
+                       {"ensembl": str(tmp_path / "ensembl.txt")}, disease_adjust=["sex"])
 
     out = run_batch_effects(spec)
     m = pd.read_csv(out / "cell_metrics.tsv", sep="\t")
@@ -182,7 +194,7 @@ def test_different_donors_across_datasets(tmp_path):
     for t in ("Exc", "Ast"):
         a, b = cells.loc[("a", t)], cells.loc[("b", t)]
         assert a["cells_balanced"] == b["cells_balanced"] > 0
-        assert a["donors_balanced"] == b["donors_balanced"] <= 5
+        assert a["donors_balanced"] == b["donors_balanced"] <= 6
         assert a["cells_balanced"] % a["donors_balanced"] == 0
     exc = m[(m["label"] == "dataset") & (m["metric"] == "pc_regression") & (m["celltype"] == "Exc")]
     assert exc["n_cells"].item() == 2 * cells.loc[("a", "Exc"), "cells_balanced"]
@@ -191,6 +203,19 @@ def test_different_donors_across_datasets(tmp_path):
     assert accuracy["value"].item() > 0.9
     conf = pd.read_csv(out / "confounding.tsv", sep="\t")
     assert set(conf["grouping"]) == {"dataset"}
+
+    # Disease: found within each dataset, the same genes in both, and a
+    # classifier fitted on one works on the other once each is standardized
+    dis = pd.read_csv(out / "disease.tsv", sep="\t")
+    exc = dis[dis["celltype"] == "Exc"].set_index(["label", "metric"])
+    for name in ("a", "b"):
+        assert exc.loc[(name, "de_mean_t2"), "excess"] > 1
+        assert (name, "de_share_fdr05") in exc.index
+    assert exc.loc[("a", "within_accuracy"), "value"] > 0.7  # b: too few donors per class for 5 folds
+    assert exc.loc[("a vs b", "t_correlation"), "value"] > 0.3
+    assert exc.loc[("a -> b", "transfer_accuracy_rescaled"), "value"] > 0.7
+    assert ("b -> a", "transfer_accuracy") in exc.index
+    assert "disease" in set(pd.read_csv(out / "summary.tsv", sep="\t")["level"])
     assert not any(donor in _all_output_text(out) for donor in donors_a + donors_b)
 
 

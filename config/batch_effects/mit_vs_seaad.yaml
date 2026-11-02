@@ -6,6 +6,9 @@
 # SeaAD it is stored as a category.
 output_dir: data/v2/batch_effects/mit_vs_seaad
 max_cells_per_donor: 300
+# Disease signal (disease.tsv): dementia within each dataset, and transfer
+# of a dementia classifier from one to the other
+disease_adjust: [sex, age]
 
 datasets:
   rosmap_mit:
@@ -24,6 +27,7 @@ datasets:
       dementia: {column: cogdx, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
       sex: {column: msex, recode: {"0": female, "1": male}}
       age: {column: age_death, numeric: true}
+    disease: {column: cogdx, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
   seaad:
     # The column-mapped copy from run_all_seaad.sh if it exists, else the
     # original download (not column-mapped: it has Subclass, not Celltype)
@@ -46,6 +50,7 @@ datasets:
       dementia: {column: Cognitive Status, recode: {"Dementia": "yes", "No dementia": "no"}}
       sex: {column: Sex, recode: {"Female": female, "Male": male}}
       age: {column: Age at Death, numeric: true}
+    disease: {column: Cognitive Status, recode: {"Dementia": "yes", "No dementia": "no"}}
 
 gene_sets:
   seurat_v3_donor_1000: data/v2/processed/rosmap_mit_hvg1000_k30.h5ad

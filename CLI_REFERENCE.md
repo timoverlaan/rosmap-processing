@@ -174,6 +174,18 @@ value − null mean), because batches hold whole donors. Writes `cells.tsv`,
 `provenance.json`: aggregate rows only (gene set × cell type × label, never a
 donor); cell types with fewer than `min_donors` donors are left out.
 
+With a two-level `disease` label for every dataset (e.g. dementia from
+`cogdx`), `disease.tsv` measures the signal a correction must keep, per gene
+set and cell type on the pseudobulk: per dataset, the share of genes with a
+disease effect at FDR < 0.05 and the mean t² (adjusted for the covariates in
+`disease_adjust`) and the cross-validated classifier accuracy; per pair of
+datasets, the correlation of the per-gene disease t statistics and the
+balanced accuracy of a classifier fitted on one dataset and scored on the
+other (`transfer_accuracy`: standardized on the training data;
+`transfer_accuracy_rescaled`: each dataset standardized on its own). With the
+same donors in both datasets, transfer is scored on donors left out of the
+fit. Nulls shuffle the disease label between donors.
+
 ### `pipeline mathys2023-for-adprs`
 ```bash
 python -m rosmap_processing pipeline mathys2023-for-adprs \

@@ -30,6 +30,10 @@ datasets:
       age: {column: age_death, numeric: true}
       pmi: {column: pmi, numeric: true}
       braak: {column: braaksc, numeric: true}
+    # Disease signal (disease.tsv): cogdx 1 no cognitive impairment, 2-3 MCI,
+    # 4-5 Alzheimer's dementia, 6 other dementia; as in mit_vs_seaad.yaml
+    disease: {column: cogdx, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
+disease_adjust: [sex, age]
 
 # Gene sets: processed files (genes by Ensembl ID) or TXT lists (symbols)
 gene_sets:

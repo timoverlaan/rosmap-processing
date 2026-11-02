@@ -31,6 +31,9 @@ datasets:
       age: {column: Age at Death, numeric: true}
       adnc: {column: Overall AD neuropathological Change}
       braak: {column: Braak}
+    # Disease signal (disease.tsv)
+    disease: {column: Cognitive Status, recode: {"Dementia": "yes", "No dementia": "no"}}
+disease_adjust: [sex, age]
 
 gene_sets:
   seurat_v3_donor_1000: data/v2/processed/seaad_hvg1000_k30.h5ad

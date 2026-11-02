@@ -31,6 +31,9 @@ datasets:
       age: {column: age_death, numeric: true}
       pmi: {column: pmi, numeric: true}
       braak: {column: braaksc, numeric: true}
+    # Disease signal (disease.tsv): dementia from cogdx, as in rosmap_mit.yaml
+    disease: {column: cogdx, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
+disease_adjust: [sex, age]
 
 gene_sets:
   seurat_v3_donor_1000: data/v2/processed/rosmap_green_hvg1000_k30.h5ad

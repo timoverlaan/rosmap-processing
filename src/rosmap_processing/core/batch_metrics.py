@@ -20,6 +20,8 @@ Donor level (pseudobulk, one row per donor or donor x dataset):
     partial_r2        per gene, the variance a term explains beyond the others
     classify          cross-validated balanced accuracy of predicting a label
     cramers_v / eta_squared  association between two donor-level variables
+    association       per-gene t statistics of a term (share at FDR < 0.05, mean t²)
+    transfer_accuracy  a classifier fitted on one dataset, scored on another
     paired_decomposition  dataset vs donor variance for donors in two datasets
 """
 
@@ -224,6 +226,78 @@ def partial_r2(Y: np.ndarray, X: np.ndarray, term_columns: np.ndarray) -> np.nda
     rss_reduced = _rss(X[:, keep], Y)
     return np.divide(rss_reduced - rss_full, rss_reduced,
                      out=np.zeros_like(rss_full), where=rss_reduced > 0)
+
+
+def coefficient_t(Y: np.ndarray, X: np.ndarray, column: int) -> np.ndarray:
+    """Per column of Y: the t statistic of coefficient `column` in an OLS fit
+    on X (NaN where there is no residual variance)."""
+    Y = np.asarray(Y, dtype=np.float64)
+    n, p = X.shape
+    xtx_inv = np.linalg.pinv(X.T @ X)
+    beta = xtx_inv @ (X.T @ Y)
+    rss = ((Y - X @ beta) ** 2).sum(axis=0)
+    se = np.sqrt(rss / max(n - p, 1) * xtx_inv[column, column])
+    return np.divide(beta[column], se, out=np.full(Y.shape[1], np.nan), where=se > 0)
+
+
+def bh_fdr(p: np.ndarray) -> np.ndarray:
+    """Benjamini-Hochberg adjusted p-values."""
+    p = np.asarray(p, dtype=np.float64)
+    n = len(p)
+    if not n:
+        return p
+    order = np.argsort(p)
+    adjusted = np.minimum.accumulate((p[order] * n / np.arange(1, n + 1))[::-1])[::-1]
+    out = np.empty(n)
+    out[order] = np.minimum(adjusted, 1.0)
+    return out
+
+
+def association(Y: np.ndarray, X: np.ndarray, column: int, alpha: float = 0.05) -> Tuple[float, float, np.ndarray]:
+    """How many genes (columns of Y) carry the term in X's `column`: the share
+    with BH FDR < alpha, the mean t² (about 1 without any effect), and the t
+    statistics."""
+    t = coefficient_t(Y, X, column)
+    df = max(X.shape[0] - X.shape[1], 1)
+    p = np.where(np.isfinite(t), 2 * stats.t.sf(np.abs(np.nan_to_num(t)), df), 1.0)
+    return float((bh_fdr(p) < alpha).mean()), float(np.nanmean(t ** 2)), t
+
+
+def transfer_accuracy(
+    X_train: np.ndarray, y_train, X_test: np.ndarray, y_test, rng: np.random.Generator,
+    groups_train=None, groups_test=None, n_splits: int = 5, n_components: int = 20,
+) -> float:
+    """Balanced accuracy on the test rows of a classifier (standardize, PCA,
+    logistic regression) fitted on the training rows. If the two share groups
+    (the same donors in two datasets), the test groups are split in n_splits
+    folds and each fold is predicted by a model fitted without those groups."""
+    from sklearn.decomposition import PCA
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import balanced_accuracy_score
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    y_train, y_test = np.asarray(y_train, dtype=object), np.asarray(y_test, dtype=object)
+    groups_train = np.arange(len(y_train)) if groups_train is None else np.asarray(groups_train, dtype=object)
+    groups_test = -1 - np.arange(len(y_test)) if groups_test is None else np.asarray(groups_test, dtype=object)
+    shared = np.intersect1d(groups_train.astype(str), groups_test.astype(str))
+    if len(shared):
+        unique = np.unique(groups_test.astype(str))
+        fold_of = dict(zip(rng.permutation(unique), np.arange(len(unique)) % n_splits))
+        folds = np.array([fold_of[g] for g in groups_test.astype(str)])
+    else:
+        folds = np.zeros(len(y_test), dtype=int)
+    predicted = np.empty(len(y_test), dtype=object)
+    for fold in np.unique(folds):
+        test = folds == fold
+        train = ~np.isin(groups_train.astype(str), groups_test[test].astype(str))
+        if len(np.unique(y_train[train])) < 2:
+            return float("nan")
+        n_comp = min(n_components, X_train.shape[1], int(train.sum()) - 1)
+        model = make_pipeline(StandardScaler(), PCA(n_components=n_comp),
+                              LogisticRegression(max_iter=2000, class_weight="balanced"))
+        predicted[test] = model.fit(X_train[train], y_train[train]).predict(X_test[test])
+    return float(balanced_accuracy_score(y_test, predicted))
 
 
 def classify(
