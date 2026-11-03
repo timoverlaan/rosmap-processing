@@ -1,4 +1,5 @@
-"""Turn an .h5Seurat file (or a SeuratDisk-converted h5ad) into a raw-count h5ad.
+"""Turn an .h5Seurat file (or a SeuratDisk-converted h5ad, or the .h5 that
+src/convert_R/rdata_to_h5.R writes from an .rds/.rda) into a raw-count h5ad.
 
 An .h5Seurat is read directly: its RNA `counts` slot becomes X (see h5seurat.py).
 SeuratDisk's `Convert()` instead writes Seurat's `data` slot to X and the
@@ -22,6 +23,7 @@ from ..utils.provenance import provenance_record
 from .category_fix import fix_categories
 from .h5seurat import read_h5seurat
 from .metadata import add_metadata
+from .rmatrix import read_matrix_h5
 
 logger = get_logger(__name__)
 
@@ -98,6 +100,8 @@ def prepare_file(
     logger.info(f"Loading {input_path}")
     if input_path.suffix.lower() == ".h5seurat":
         adata = read_h5seurat(input_path)
+    elif input_path.suffix.lower() == ".h5":
+        adata = read_matrix_h5(input_path)
     else:
         adata = ad.read_h5ad(input_path)
     logger.info(f"Loaded: {adata.n_obs} cells x {adata.n_vars} genes, raw present: {adata.raw is not None}")

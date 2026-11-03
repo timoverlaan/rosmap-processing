@@ -81,3 +81,34 @@ def test_category_fix_drops_raw_when_x_holds_counts():
     out = fix_categories(adata, columns=[], remove_raw=True)
     assert out.raw is None
     assert out.X.dtype == np.int32
+
+
+def _write_r_matrix(path, genes_by_cells: sp.csc_matrix, genes, cells):
+    """The layout of src/convert_R/rdata_to_h5.R: CSC arrays of genes x cells."""
+    import h5py
+
+    with h5py.File(path, "w") as f:
+        f["data"] = genes_by_cells.data.astype(np.float64)
+        f["indices"] = genes_by_cells.indices
+        f["indptr"] = genes_by_cells.indptr
+        f["shape"] = np.array([len(cells), len(genes)])
+        f["genes"] = np.array(genes, dtype=object).astype("S")
+        f["cells"] = np.array(cells, dtype=object).astype("S")
+
+
+def test_prepare_file_reads_r_matrix(tmp_path):
+    counts = np.array([[0, 3, 1], [2, 0, 0], [0, 0, 5], [1, 1, 0]])  # cells x genes
+    genes, cells = ["G1", "G2", "G3"], ["c1", "c2", "c3", "c4"]
+    _write_r_matrix(tmp_path / "m.h5", sp.csc_matrix(counts.T), genes, cells)
+    prepare_file(tmp_path / "m.h5", tmp_path / "out.h5ad", categorical_columns=[])
+    out = ad.read_h5ad(tmp_path / "out.h5ad")
+    assert out.obs_names.tolist() == cells and out.var_names.tolist() == genes
+    assert out.X.dtype == np.int32
+    np.testing.assert_array_equal(out.X.toarray(), counts)
+
+
+def test_prepare_file_rejects_r_matrix_without_counts(tmp_path):
+    values = sp.csc_matrix(np.array([[0.5, 0.0], [0.0, 1.2]]))
+    _write_r_matrix(tmp_path / "m.h5", values, ["G1", "G2"], ["c1", "c2"])
+    with pytest.raises(ValueError, match="raw counts"):
+        prepare_file(tmp_path / "m.h5", tmp_path / "out.h5ad", categorical_columns=[])

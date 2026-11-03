@@ -72,8 +72,10 @@ SYNAPSE_IDS_PSYCHAD = {
 }
 
 # Synapse IDs for AMP-AD_DiverseCohorts: the gene expression part of the 10x
-# multiome (filtered counts per cell class, and the later gene expression
-# matrices per subclass), and the donor metadata. The ATAC files are not used.
+# multiome (filtered counts per cell class, 2023, and the gene expression
+# matrices per subclass, 2025), the cell metadata of both releases, and the
+# donor metadata. The libraries pool several donors; only the cell metadata
+# says which donor a cell is from. The ATAC files are not used.
 SYNAPSE_IDS_DIVERSE_COHORTS = {
     "counts_astro": "syn52138701",
     "counts_endo": "syn52138703",
@@ -97,6 +99,8 @@ SYNAPSE_IDS_DIVERSE_COHORTS = {
     "gex_olig1": "syn71722585",
     "gex_olig2": "syn71722588",
     "gex_opc": "syn71722591",
+    "cell_metadata_2023": "syn52136317",
+    "cell_clusters_2024": "syn72367414",
     "individual_metadata": "syn51757646",
     "biospecimen_metadata": "syn51757645",
     "assay_multiome_metadata": "syn53649030",
@@ -187,6 +191,8 @@ SYNAPSE_FILES = {
     "syn71722585": SynapseFile("gex_mat_Olig1.rda", 2, "2981f8e5a15d295974421877c25a8ad2", 3239210039),
     "syn71722588": SynapseFile("gex_mat_Olig2.rda", 2, "abadc0ee5607dd0fee68078221251ef9", 2911968239),
     "syn71722591": SynapseFile("gex_mat_Opc.rda", 2, "9632a427ebba2f5920c038646dc44ddb", 1643163991),
+    "syn52136317": SynapseFile("rosmap_diversity_snmultiome_celltypes_metadata_20230410.csv", 2, "cd7f3defbd2d55ccead51f3ab2d91b4d", 351486305),
+    "syn72367414": SynapseFile("rosmap_diversity_snmultiome_clusterdata_20241107.csv", 2, "72c8c7a8f285cee96dc2b03b374a4138", 735715383),
     "syn51757646": SynapseFile("AMP-AD_DiverseCohorts_individual_metadata.csv", 22, "82e8473a617dc84312201e26be0855c3", 359693),
     "syn51757645": SynapseFile("AMP-AD_DiverseCohorts_biospecimen_metadata.csv", 15, "8d5c3cf33864c24bdc38586e63d67a08", 651374),
     "syn53649030": SynapseFile("AMP-AD_DiverseCohorts_assay_multiome_metadata.csv", 6, "5022b2010dcba1735a80775aafd61aa8", 78640),

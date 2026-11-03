@@ -7,6 +7,7 @@ keeping or replacing it. Each downloaded file is checked the same way.
 """
 
 import hashlib
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 import sys
@@ -25,6 +26,8 @@ from rosmap_processing.utils.constants import (
 from rosmap_processing.utils.logging import get_logger
 
 logger = get_logger(__name__)
+# synapseclient's HTTP client logs every chunk request with its presigned URL
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 DATASETS = {
     "rosmap": ("ROSMAP", SYNAPSE_IDS_ROSMAP),

@@ -11,31 +11,33 @@ existing output unless `--overwrite` is given.
 
 ### `data download`
 ```bash
-python -m rosmap_processing data download [--dataset all|rosmap|rosmap-mit] \
+python -m rosmap_processing data download [--dataset all|rosmap|rosmap-mit|psychad|diverse-cohorts] \
     [--output-dir data/raw] [--include-raw-h5ad]
 ```
 Downloads the pinned versions in `SYNAPSE_FILES` (`utils/constants.py`) into
-`<output-dir>/ROSMAP` and `<output-dir>/ROSMAP_MIT`, and checks each file's size
-and MD5. A file that is already present is kept if it matches and is an error
-if it does not (it is never overwritten). The 103 GB unfiltered ROSMAP-MIT h5ad
-is only fetched with `--include-raw-h5ad`. Needs `SYNAPSE_AUTH_TOKEN` or
-`token.txt` only when something has to be downloaded.
+`<output-dir>/ROSMAP`, `ROSMAP_MIT`, `PsychAD` and `DiverseCohorts`, and checks
+each file's size and MD5. A file that is already present is kept if it matches
+and is an error if it does not (it is never overwritten). The unfiltered h5ad
+files (ROSMAP-MIT 103 GB, PsychAD before QC 106 GB) are only fetched with
+`--include-raw-h5ad`. Needs `SYNAPSE_AUTH_TOKEN` or `token.txt` only when
+something has to be downloaded. On DAIC: `sbatch slurm/download.sh <dataset>...`.
 
 ### `data verify`
 ```bash
-python -m rosmap_processing data verify --dataset rosmap|rosmap-mit --dir <directory>
+python -m rosmap_processing data verify --dataset rosmap|rosmap-mit|psychad|diverse-cohorts --dir <directory>
 ```
 Checks size and MD5 of the pinned files in a directory; exits non-zero on any
 missing or mismatched file. Needs no Synapse login.
 
 ### `data prepare`
 ```bash
-python -m rosmap_processing data prepare <input.h5Seurat|converted.h5ad> --output <counts.h5ad> \
+python -m rosmap_processing data prepare <input.h5Seurat|converted.h5ad|matrix.h5> --output <counts.h5ad> \
     [--columns cell_type_high_resolution ...] [--metadata data/v2/download/ROSMAP/ROSMAP_clinical.csv]
 ```
 Takes an `.h5Seurat` file (the RNA `counts` slot and `meta.data` are read
-directly, R factors become categoricals) or a SeuratDisk-converted h5ad
-(X = Seurat `data` slot, `.raw` = counts),
+directly, R factors become categoricals), a SeuratDisk-converted h5ad
+(X = Seurat `data` slot, `.raw` = counts), or the `.h5` that
+`src/convert_R/rdata_to_h5.R` writes from the sparse matrix in an `.rds`/`.rda`,
 puts the counts in X as int32, checks that every stored value is a
 non-negative integer (fails otherwise), makes the given obs columns
 categorical, and merges clinical metadata on `projid` (or `individualID`).
