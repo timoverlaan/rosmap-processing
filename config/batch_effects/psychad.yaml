@@ -1,0 +1,68 @@
+# Batch effects within PsychAD (Mount Sinai, NIMH HBCC and Rush donors; 10x
+# snRNA of hashed donor pools, DLPFC): hashing set and channel vs donor, cell
+# type and donor covariates, on the gene sets of the MIT/SeaAD pairs (genes
+# matched by Ensembl ID; ones PsychAD lacks are left out of a set, logged).
+#   sbatch slurm/batch_effects.sh config/batch_effects/psychad.yaml
+output_dir: data/v2/batch_effects/psychad
+max_cells_per_donor: 300
+
+datasets:
+  psychad:
+    counts: data/v2/counts/PsychAD/combined.h5ad
+    gene_map: data/v2/reference/psychad_gene_map.tsv
+    donor: individualID
+    # The authors' classes; microglia only from the immune class (not
+    # perivascular macrophages or adaptive cells); vascular = endothelial and
+    # mural cells (VLMC, SMC, pericytes)
+    celltype:
+      - {column: class, match: "^EN$", label: Exc}
+      - {column: class, match: "^IN$", label: Inh}
+      - {column: class, match: "^Astro$", label: Ast}
+      - {column: class, match: "^Oligo$", label: Oli}
+      - {column: class, match: "^OPC$", label: OPC}
+      - {column: subclass, match: "^Micro$", label: Mic}
+      - {column: class, match: "^(Endo|Mural)$", label: Vasc}
+    # A hashing set pools about six donors (between donors); it runs in two
+    # channels and nearly every donor is in both (within donors)
+    batch: [hashing_set, channel]
+    covariates:
+      brain_bank: {column: Source}
+      diagnosis: {column: Tier1_crossDis_dx}
+      sex: {column: sex}
+      age: {column: ageDeath, numeric: true}
+      pmi: {column: PMI, numeric: true}
+      race: {column: race}
+      cdr: {column: CDR, numeric: true}
+      # Braak written both as Roman and Arabic stages; CERAD as 0 none - 3
+      # frequent plaques; APOE as the number of e4 alleles
+      braak: {column: Braak, numeric: true, recode: {"Stage 0": 0, "Stage I": 1, "Stage II": 2, "Stage III": 3,
+                                                     "Stage IV": 4, "Stage V": 5, "Stage VI": 6, "Stage 1": 1,
+                                                     "Stage 2": 2, "Stage 3": 3, "Stage 4": 4, "Stage 5": 5,
+                                                     "Stage 6": 6}}
+      cerad: {column: amyCerad, numeric: true, recode: {"None/No AD/C0": 0, "Sparse/Possible/C1": 1,
+                                                        "Moderate/Probable/C2": 2, "Frequent/Definite/C3": 3}}
+      apoe4: {column: apoeGenotype, numeric: true, recode: {"22": 0, "23": 0, "33": 0, "24": 1, "34": 1, "44": 2}}
+    # Disease signal (disease.tsv): AD vs neurotypical controls, the paper's
+    # Tier 1 cross-disorder diagnosis (other diagnoses count as missing)
+    disease: {column: Tier1_crossDis_dx, recode: {"AD": "yes", "CTRL": "no"}}
+disease_adjust: [sex, age]
+# Donor effect (donor_effect.tsv), as in rosmap_mit.yaml
+donor_models:
+  sex_age: [sex, age]
+  sex_age_apoe4: [sex, age, apoe4]
+  pathology: [braak, cerad]
+  dementia_pathology: [disease, braak, cerad]
+  all: [sex, age, apoe4, disease, braak, cerad]
+
+gene_sets:
+  seurat_v3_donor_1000: data/v2/processed/rosmap_mit_hvg1000_k30.h5ad
+  seurat_v3_donor_2000: data/v2/processed/rosmap_mit_hvg2000_k30.h5ad
+  seurat_v3_donor_3000: data/v2/processed/rosmap_mit_hvg3000_k30.h5ad
+  seurat_donor_1000: data/v2/processed/rosmap_mit_hvg1000_postnorm_k30.h5ad
+  seurat_donor_2000: data/v2/processed/rosmap_mit_hvg2000_postnorm_k30.h5ad
+  seurat_donor_3000: data/v2/processed/rosmap_mit_hvg3000_postnorm_k30.h5ad
+  seurat_v3_donor_2000_3way: data/v2/processed/rosmap_mit_hvg2000_3way_k30.h5ad
+  lieke_hvg: data/v2/processed/rosmap_mit_lieke_hvg_k30.h5ad
+  lieke_allgenes_seurat_v3_2000: data/v2/processed/rosmap_mit_lieke_allgenes_hvg2k_k30.h5ad
+  lieke_allgenes_seurat_2000: data/v2/processed/rosmap_mit_lieke_allgenes_hvg2k_postnorm_k30.h5ad
+  mathys2019_degs: data/v2/processed/rosmap_mit_mathys2019degs_k30.h5ad

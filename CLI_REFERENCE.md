@@ -42,6 +42,32 @@ puts the counts in X as int32, checks that every stored value is a
 non-negative integer (fails otherwise), makes the given obs columns
 categorical, and merges clinical metadata on `projid` (or `individualID`).
 
+### `data diverse-cohorts`
+```bash
+python -m rosmap_processing data diverse-cohorts <gex_mat_X.h5> --output <X.h5ad> \
+    [--download-dir data/v2/download/DiverseCohorts] [--clinical <ROSMAP_clinical.csv>] \
+    [--region "dorsolateral prefrontal cortex"|all]
+```
+One DiverseCohorts cell class (the `.h5` that `rdata_to_h5.R` writes from a
+`gex_mat_*.rda`) -> a count file. The libraries pool three donors, so cells are
+kept only if the 2024 cell table has them (and they are from `--region`); the
+table gives donor, specimen, region, pool (`batch`), cell classes and Rush's
+cogdx/Braak/CERAD. Adds the individual metadata, projid (Rush mapping, else the
+clinical CSV) and the ROSMAP clinical columns joined on individualID (ROS and
+MAP donors only). Run for every class by `slurm/run_all_diverse_cohorts.sh`.
+
+### `data psychad`
+```bash
+python -m rosmap_processing data psychad <merged_final_clean.h5ad> --output <combined.h5ad> \
+    [--download-dir data/v2/download/PsychAD] [--clinical <ROSMAP_clinical.csv>]
+```
+PsychAD's counts (`layers['counts']`; X there is normalized) -> X as int32,
+streamed in chunks of cells (6.3 million cells, 24.6 billion values) and checked
+to be counts. obs gains `individualID`, the NPS-AD individual metadata, the
+tiered diagnoses, `hashing_set` and `channel` (hashing set + pool replicate from
+the cell name), and the ROSMAP clinical columns for Rush donors. Genes keep
+their Ensembl IDs. Run by `slurm/run_all_psychad.sh`.
+
 ### `data category-fix`
 ```bash
 python -m rosmap_processing data category-fix <input.h5ad> [--columns ...] [--remove-raw]
@@ -87,6 +113,8 @@ data exactly, else `name`, `unique_symbol`, `unmatched` or `ambiguous`).
 |---|---|---|
 | ROSMAP-MIT (Mathys 2023), 33,538 genes | `cellranger-GRCh38-3.0.0` | Ensembl 93 |
 | SeaAD, Green 2024 ROSMAP, 36,601 genes | `cellranger-GRCh38-2020-A` | GENCODE v32 |
+| DiverseCohorts, 27,984 genes (name matching) | `cellranger-GRCh38-2020-A` | GENCODE v32 |
+| PsychAD, 34,890 genes named by Ensembl ID (kept; symbols added) | `cellranger-GRCh38-2020-A` | GENCODE v32 |
 
 ### `genes shared`
 ```bash

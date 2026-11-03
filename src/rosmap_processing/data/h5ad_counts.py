@@ -70,9 +70,11 @@ def copy_counts(
                 X.attrs["encoding-version"] = "0.1.0"
                 X.attrs["shape"] = np.array([n_obs, n_vars], dtype=np.int64)
                 chunks = (min(max(nnz, 1), 1 << 20),)
-                data = X.create_dataset("data", shape=(nnz,), dtype=np.int32, chunks=chunks, compression="gzip")
-                indices = X.create_dataset("indices", shape=(nnz,), dtype=np.int32, chunks=chunks,
-                                           compression="gzip")
+                # gzip level 1: several times faster than the default 4 on
+                # billions of values, and small counts compress well anyway
+                packed = dict(chunks=chunks, compression="gzip", compression_opts=1)
+                data = X.create_dataset("data", shape=(nnz,), dtype=np.int32, **packed)
+                indices = X.create_dataset("indices", shape=(nnz,), dtype=np.int32, **packed)
                 X.create_dataset("indptr", data=indptr)
                 maximum = 0
                 for start in range(0, n_obs, chunk_rows):

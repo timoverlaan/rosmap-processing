@@ -58,6 +58,7 @@ _ATTR_RE = re.compile(r'(\S+) "([^"]*)"')
 _VERSION_RE = re.compile(r"^(ENS[GTE]\d+)\.\d+")
 # SeaAD names the later copies of a duplicated symbol "<symbol> <Ensembl ID>"
 _EMBEDDED_ID_RE = re.compile(r"^\S+ (ENSG\d+)$")
+_ENSEMBL_ID_RE = re.compile(r"^ENSG\d+(\.\d+)?$")
 _EXCLUDED_TAGS = {"readthrough_transcript", "PAR"}
 
 
@@ -165,11 +166,26 @@ def build_gene_map(var_names: Sequence[str], reference: pd.DataFrame) -> pd.Data
     Returns a DataFrame with columns var_name, gene_id (None if unmatched),
     ref_name and method ('position', 'name', 'embedded_id', 'unique_symbol' or
     'unmatched'), in dataset order. 'embedded_id' is a name like
-    "TBCE ENSG00000284770" whose Ensembl ID is in the reference.
+    "TBCE ENSG00000284770" whose Ensembl ID is in the reference. A dataset
+    whose genes are named by Ensembl ID (PsychAD) keeps those IDs (method
+    'ensembl_id', ref_name None for IDs the reference lacks).
     """
     var_names = [str(v) for v in var_names]
     ref_ids = reference["gene_id"].tolist()
     ref_names = reference["gene_name"].tolist()
+
+    if var_names and sum(bool(_ENSEMBL_ID_RE.match(v)) for v in var_names) > 0.9 * len(var_names):
+        name_by_id = dict(zip(ref_ids, ref_names))
+        ids = [strip_version(v) if _ENSEMBL_ID_RE.match(v) else None for v in var_names]
+        gene_map = pd.DataFrame({
+            "var_name": var_names,
+            "gene_id": ids,
+            "ref_name": [name_by_id.get(i) for i in ids],
+            "method": ["ensembl_id" if i else "unmatched" for i in ids],
+        })
+        in_reference = int(gene_map["ref_name"].notna().sum())
+        logger.info(f"Genes are named by Ensembl ID; {in_reference} of {len(var_names)} are in the reference")
+        return gene_map
 
     candidates = {sep: make_unique(ref_names, sep) for sep in (".", "-")}
 

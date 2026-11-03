@@ -54,3 +54,11 @@ if [ -e "$DC_COUNTS" ]; then
         rp genes build-map --gtf "$GENCODE32" --recipe cellranger-GRCh38-2020-A \
             --h5ad "$DC_COUNTS" --output "$REF/diverse_cohorts_gene_map.tsv"
 fi
+
+# PsychAD names its genes by Ensembl ID; the map keeps them and adds the
+# GENCODE v32 symbols.
+if [ -e "$PSYCHAD_COUNTS" ]; then
+    skip_if_exists "$REF/psychad_gene_map.tsv" \
+        rp genes build-map --gtf "$GENCODE32" --recipe cellranger-GRCh38-2020-A \
+            --h5ad "$PSYCHAD_COUNTS" --output "$REF/psychad_gene_map.tsv"
+fi

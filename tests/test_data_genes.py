@@ -97,6 +97,16 @@ def test_build_gene_map_reads_embedded_ensembl_ids():
     assert gm["method"].tolist() == ["ambiguous", "ambiguous"]
 
 
+def test_build_gene_map_keeps_ensembl_id_names():
+    # PsychAD style: genes named by Ensembl ID, some not in the reference
+    ref = pd.DataFrame({"gene_id": ["ENSG01", "ENSG02"], "gene_name": ["A", "B"]})
+    names = ["ENSG02", "ENSG01.4", "ENSG77"] + [f"ENSG1{i}" for i in range(7)] + ["MT-X"]
+    gm = build_gene_map(names, ref)
+    assert gm["gene_id"].tolist()[:3] == ["ENSG02", "ENSG01", "ENSG77"]
+    assert gm["ref_name"].tolist()[:3] == ["B", "A", None]
+    assert gm["method"].tolist()[-2:] == ["ensembl_id", "unmatched"]
+
+
 def test_shared_gene_ids(tmp_path):
     a = tmp_path / "a.tsv"
     b = tmp_path / "b.tsv"

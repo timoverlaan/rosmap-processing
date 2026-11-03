@@ -1,0 +1,61 @@
+# Dataset effect ROSMAP-MIT vs PsychAD, within broad cell types, on the gene
+# sets of the MIT/SeaAD pairs, with all donors of both. PsychAD's ROS and MAP
+# donors may also be in MIT (under another donor label here);
+# mit_vs_psychad_shared.yaml compares those directly.
+#   sbatch slurm/batch_effects.sh config/batch_effects/mit_vs_psychad.yaml
+# Covariates are recoded to shared labels, as in mit_vs_seaad.yaml; PsychAD's
+# dementia is CDR 1 or more.
+output_dir: data/v2/batch_effects/mit_vs_psychad
+max_cells_per_donor: 300
+# Disease signal (disease.tsv): within each dataset, and transfer of a
+# classifier from one to the other. The labels differ: dementia (cogdx 4-6 vs
+# 1-3) in MIT, AD vs neurotypical controls in PsychAD.
+disease_adjust: [sex, age]
+
+datasets:
+  rosmap_mit:
+    counts: data/v2/counts/ROSMAP_MIT/combined.h5ad
+    gene_map: data/v2/reference/rosmap_mit_gene_map.tsv
+    donor: projid
+    celltype:
+      - {column: source_file, match: "Excitatory", label: Exc}
+      - {column: source_file, match: "Inhibitory", label: Inh}
+      - {column: source_file, match: "Astrocytes", label: Ast}
+      - {column: source_file, match: "Oligodendrocytes", label: Oli}
+      - {column: source_file, match: "OPCs", label: OPC}
+      - {column: cell_type_high_resolution, match: "^Mic", label: Mic}
+    covariates:
+      dementia: {column: cogdx, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
+      sex: {column: msex, recode: {"0": female, "1": male}}
+      age: {column: age_death, numeric: true}
+    disease: {column: cogdx, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
+  psychad:
+    counts: data/v2/counts/PsychAD/combined.h5ad
+    gene_map: data/v2/reference/psychad_gene_map.tsv
+    donor: individualID
+    celltype:
+      - {column: class, match: "^EN$", label: Exc}
+      - {column: class, match: "^IN$", label: Inh}
+      - {column: class, match: "^Astro$", label: Ast}
+      - {column: class, match: "^Oligo$", label: Oli}
+      - {column: class, match: "^OPC$", label: OPC}
+      - {column: subclass, match: "^Micro$", label: Mic}
+    covariates:
+      dementia: {column: CDR, recode: {"0": "no", "0.5": "no", "1": "yes", "2": "yes", "3": "yes", "4": "yes",
+                                       "5": "yes"}}
+      sex: {column: sex}
+      age: {column: ageDeath, numeric: true}
+    disease: {column: Tier1_crossDis_dx, recode: {"AD": "yes", "CTRL": "no"}}
+
+gene_sets:
+  seurat_v3_donor_1000: data/v2/processed/rosmap_mit_hvg1000_k30.h5ad
+  seurat_v3_donor_2000: data/v2/processed/rosmap_mit_hvg2000_k30.h5ad
+  seurat_v3_donor_3000: data/v2/processed/rosmap_mit_hvg3000_k30.h5ad
+  seurat_donor_1000: data/v2/processed/rosmap_mit_hvg1000_postnorm_k30.h5ad
+  seurat_donor_2000: data/v2/processed/rosmap_mit_hvg2000_postnorm_k30.h5ad
+  seurat_donor_3000: data/v2/processed/rosmap_mit_hvg3000_postnorm_k30.h5ad
+  seurat_v3_donor_2000_3way: data/v2/processed/rosmap_mit_hvg2000_3way_k30.h5ad
+  lieke_hvg: data/v2/processed/rosmap_mit_lieke_hvg_k30.h5ad
+  lieke_allgenes_seurat_v3_2000: data/v2/processed/rosmap_mit_lieke_allgenes_hvg2k_k30.h5ad
+  lieke_allgenes_seurat_2000: data/v2/processed/rosmap_mit_lieke_allgenes_hvg2k_postnorm_k30.h5ad
+  mathys2019_degs: data/v2/processed/rosmap_mit_mathys2019degs_k30.h5ad
