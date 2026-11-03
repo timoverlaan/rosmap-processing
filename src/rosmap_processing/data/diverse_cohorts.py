@@ -14,9 +14,9 @@ of 434 here, and is not used.
 region, and adds donor metadata: the DiverseCohorts individual metadata (age,
 APOE, race, cohort, ... for every donor), projid (Rush mapping) and, where the
 donor is a ROS or MAP participant, the ROSMAP clinical columns. A Rush donor's
-individualID is the ROSMAP one, so the clinical CSV is joined on it; most
-DiverseCohorts donors are from MARS and CLINCORE, which it does not cover.
-Rush's cogdx, Braak and CERAD are in the cell table for every donor.
+individualID is the ROSMAP one, so the clinical CSV is joined on it; it does
+not cover MARS and CLINCORE (38 of the 412 DLPFC donors). Rush's cogdx, Braak
+and CERAD are in the cell table for every donor.
 """
 
 from pathlib import Path
