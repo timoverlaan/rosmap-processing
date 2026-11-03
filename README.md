@@ -41,6 +41,9 @@ version has exactly the previous version's MD5 and size: no file changed.
 data/raw/ROSMAP_MIT/          Mathys 2023 RDS + metadata (MD5-verified in place) and the .h5Seurat made from them
 data/raw/ROSMAP/              old Green copies, NOT used (rewritten in 2025, see "Data history")
 data/v2/download/ROSMAP/      Green 2024 objects + ROSMAP metadata, fresh pinned downloads
+data/v2/download/PsychAD/     PsychAD h5ad (after the authors' QC) + donor metadata
+data/v2/download/DiverseCohorts/  DiverseCohorts multiome expression matrices (.rda), cell tables, donor metadata
+data/v2/intermediate/DiverseCohorts/  the .rda matrices as HDF5 (src/convert_R/rdata_to_h5.R)
 data/reference/               Ensembl 93 and GENCODE v32 GTFs
 data/v2/counts/<DATASET>/     raw counts in X (int32) + clinical metadata, per class and combined.h5ad
                               (RNA counts read straight from the .h5Seurat files, see below)
@@ -70,7 +73,10 @@ seurat_v3 HVG fit fails on the smallest ROSMAP-MIT donors.
 
 Green 2024 and Mathys 2023 are both ROSMAP DLPFC atlases and very likely share
 many participants: do not use one to validate a model trained on the other.
-SeaAD is an independent cohort.
+SeaAD is an independent cohort. DiverseCohorts is all Rush (ROS, MAP, MARS,
+CLINCORE) and PsychAD has 152 Rush donors, so both share participants with
+the ROSMAP atlases too. DiverseCohorts' ROS and MAP donors carry the ROSMAP
+individualID.
 
 ## Running on DAIC
 
