@@ -107,6 +107,13 @@ def test_prepare_file_reads_r_matrix(tmp_path):
     np.testing.assert_array_equal(out.X.toarray(), counts)
 
 
+def test_r_matrix_duplicate_genes_made_unique_as_in_r(tmp_path):
+    from rosmap_processing.data.rmatrix import read_matrix_h5
+
+    _write_r_matrix(tmp_path / "m.h5", sp.csc_matrix(np.eye(3)), ["A", "B", "A"], ["c1", "c2", "c3"])
+    assert read_matrix_h5(tmp_path / "m.h5").var_names.tolist() == ["A", "B", "A.1"]
+
+
 def test_prepare_file_rejects_r_matrix_without_counts(tmp_path):
     values = sp.csc_matrix(np.array([[0.5, 0.0], [0.0, 1.2]]))
     _write_r_matrix(tmp_path / "m.h5", values, ["G1", "G2"], ["c1", "c2"])

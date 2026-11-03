@@ -16,6 +16,7 @@ import pandas as pd
 import scipy.sparse as sp
 
 from ..utils.logging import get_logger
+from .genes import make_unique
 
 logger = get_logger(__name__)
 
@@ -34,5 +35,13 @@ def read_matrix_h5(path: Union[str, Path]) -> ad.AnnData:
             raise ValueError(f"{path}: indptr does not fit {n_cells} cells and the stored values")
         X = sp.csr_matrix((f["data"][()], f["indices"][()], indptr), shape=(n_cells, n_genes))
     logger.info(f"Read {Path(path).name}: {n_cells} cells x {n_genes} genes, {X.nnz} stored values")
+    # Duplicate symbols get R's make.unique suffixes (".1", ...). Most
+    # DiverseCohorts matrices have them already; gex_mat_Glut3 and _Glut4 keep
+    # 20 duplicates bare, with the same genes in the same order.
+    unique = make_unique(list(genes), ".")
+    renamed = sum(a != b for a, b in zip(genes, unique))
+    if renamed:
+        logger.info(f"{renamed} duplicate gene names made unique as R's make.unique does")
+        genes = unique
     return ad.AnnData(X=X, obs=pd.DataFrame(index=pd.Index(cells)),
                       var=pd.DataFrame(index=pd.Index(genes)))
