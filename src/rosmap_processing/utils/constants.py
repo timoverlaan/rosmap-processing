@@ -73,9 +73,10 @@ SYNAPSE_IDS_PSYCHAD = {
 
 # Synapse IDs for AMP-AD_DiverseCohorts: the gene expression part of the 10x
 # multiome (filtered counts per cell class, 2023, and the gene expression
-# matrices per subclass, 2025), the cell metadata of both releases, and the
-# donor metadata. The libraries pool several donors; only the cell metadata
-# says which donor a cell is from. The ATAC files are not used.
+# matrices per subclass, 2025, which the pipeline uses), the cell metadata of
+# both releases, and the donor metadata. The libraries pool several donors;
+# only the cell metadata says which donor a cell is from. The ATAC files are
+# not used.
 SYNAPSE_IDS_DIVERSE_COHORTS = {
     "counts_astro": "syn52138701",
     "counts_endo": "syn52138703",

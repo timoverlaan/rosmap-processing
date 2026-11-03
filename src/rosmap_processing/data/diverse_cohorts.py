@@ -6,8 +6,9 @@ src/convert_R/rdata_to_h5.R. Each library pools three specimens (donor x
 region) of different donors, so which donor and region a cell is from is only
 in the cell table `rosmap_diversity_snmultiome_clusterdata_20241107.csv`
 (pool as `batch`, `barcode`, `individualID`, `specimenID`, `region`, cell
-classes, and Rush's cogdx/Braak/CERAD). The 2023 matrices have no such table
-for their cells and are not used.
+classes, and Rush's cogdx/Braak/CERAD). The 2023 release (counts_*_filtered.rds
+and its own cell table) has 1.9 million cells of 167 donors, against 4.8 million
+of 434 here, and is not used.
 
 `annotate` keeps the cells that are in the cell table and from the chosen
 region, and adds donor metadata: the DiverseCohorts individual metadata (age,
