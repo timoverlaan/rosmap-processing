@@ -1,6 +1,8 @@
 """End-to-end tests of `pipeline batch-effects` on synthetic count files with a
 known batch effect."""
 
+import json
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -331,6 +333,29 @@ def test_reads_the_old_anndata_layout(tmp_path):
     table = summarize_obs(tmp_path / "old.h5ad", donor_column="Donor ID").set_index("column")
     assert table.loc["Sex", "level"] == "cell" and table.loc["Sex", "n_unique"] == 2
     assert table.loc["Hispanic/Latino", "pct_missing"] == 2.5
+
+
+def test_spec_variant_leaves_out_listed_genes(tmp_path):
+    rng = np.random.default_rng(3)
+    donors = [f"R{300 + i}" for i in range(6)]
+    names = _counts(tmp_path / "c.h5ad", rng, donors, {d: "B1" for d in donors})
+    _gene_files(tmp_path, list(names))
+    _write_spec(tmp_path, "base", {"rosmap": {
+        "counts": str(tmp_path / "c.h5ad"), "gene_map": str(tmp_path / "map.tsv"), "donor": "projid",
+        "celltype": CELLTYPES, "covariates": COVARIATES,
+    }}, {"ensembl": str(tmp_path / "ensembl.txt"), "symbols": str(tmp_path / "with_batch_genes.txt")})
+    # The batch genes by Ensembl ID; they leave both sets, the symbol list too
+    (tmp_path / "exclude.txt").write_text("\n".join(f"ENSG{i:011d}" for i in BATCH_GENES) + "\n")
+    variant = tmp_path / "variant.yaml"
+    variant.write_text(yaml.safe_dump({"extends": "base.yaml", "output_dir": str(tmp_path / "variant"),
+                                       "exclude_genes": str(tmp_path / "exclude.txt")}))
+    spec = load_spec(variant)
+    assert spec["name"] == "variant" and spec["n_pcs"] == SETTINGS["n_pcs"]
+
+    out = run_batch_effects(variant)
+    assert out == tmp_path / "variant"
+    sizes = json.loads((out / "provenance.json").read_text())["gene_set_sizes"]
+    assert sizes == {"ensembl": N_GENES - len(BATCH_GENES), "symbols": 40 - len(BATCH_GENES)}
 
 
 def test_spec_rejects_unknown_keys(tmp_path):

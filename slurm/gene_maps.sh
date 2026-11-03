@@ -1,6 +1,6 @@
 #!/bin/bash
 # Map ROSMAP-MIT, SeaAD and Green 2024 gene symbols to Ensembl IDs, and list
-# the IDs shared by MIT + SeaAD and by all three.
+# the IDs shared by MIT + SeaAD and by all three, and the genes on X and Y.
 # Needs data/reference/ (bash slurm/download_references.sh) and
 # data/v2/counts/{ROSMAP_MIT,ROSMAP}/combined.h5ad (sbatch slurm/run_all.sh).
 # Submit from the repo root: sbatch slurm/gene_maps.sh
@@ -39,3 +39,8 @@ skip_if_exists "$REF/shared_gene_ids.txt" \
 skip_if_exists "$REF/shared_gene_ids_3way.txt" \
     rp genes shared "$REF/rosmap_mit_gene_map.tsv" "$REF/seaad_gene_map.tsv" "$REF/rosmap_green_gene_map.tsv" \
         --output "$REF/shared_gene_ids_3way.txt"
+
+# Genes on X and Y in either reference, for the batch-effect specs *_no_xy.yaml
+skip_if_exists "$REF/sex_chromosome_gene_ids.txt" \
+    rp genes on-chromosomes --gtf "$ENS93" "$GENCODE32" --chromosomes X Y \
+        --output "$REF/sex_chromosome_gene_ids.txt"

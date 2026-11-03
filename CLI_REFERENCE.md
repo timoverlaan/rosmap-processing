@@ -92,6 +92,15 @@ python -m rosmap_processing genes shared <map_a.tsv> <map_b.tsv> [<map_c.tsv> ..
 ```
 Ensembl IDs mapped in every given map, in the first map's order.
 
+### `genes on-chromosomes`
+```bash
+python -m rosmap_processing genes on-chromosomes --gtf <a.gtf.gz> [<b.gtf.gz> ...] \
+    --chromosomes X Y --output <ids.txt>
+```
+Ensembl IDs (without versions; a chrY PAR copy counts as its X gene) of every
+gene on the given chromosomes in any of the GTFs (`X` and `chrX` alike), e.g.
+to leave the sex-chromosome genes out of an analysis.
+
 ## pipeline
 
 ### `pipeline scanpy`
@@ -201,6 +210,12 @@ pseudobulk variance that is not cell sampling noise), and
 donors, the same between the two datasets (`cross_dataset_reliability`). Nulls
 shuffle the covariates between donors. Numeric covariates take a `recode` map
 too (e.g. `Braak IV` → 4).
+
+`exclude_genes` (a TXT list of Ensembl IDs or symbols) leaves those genes out
+of every gene set. `extends: <spec>.yaml` (relative to the spec) takes another
+spec as the base, so a variant names only what differs: the `*_no_xy.yaml`
+specs rerun the others without the X and Y genes (`genes on-chromosomes`, made
+by `slurm/gene_maps.sh`) into their own output directories.
 
 ### `pipeline mathys2023-for-adprs`
 ```bash

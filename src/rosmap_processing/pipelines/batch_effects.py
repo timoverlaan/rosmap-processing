@@ -33,6 +33,10 @@ cells, whose shared variance is the reproducible part of the donor effect
 (cell sampling noise drops out). With matched donors, at donor level between
 the datasets: the part of the donor effect both reproduce.
 
+With `exclude_genes` (a TXT list, e.g. the X and Y genes from `genes
+on-chromosomes`), those genes are left out of every gene set; `extends` reuses
+another spec, so such a variant only names what differs.
+
 A batch that holds whole donors also carries their differences, so every
 batch, dataset and covariate metric comes with a null (`null_type`): the same
 label shuffled between donors. A label that splits donors is shuffled within
@@ -116,6 +120,7 @@ DEFAULTS: Dict[str, Any] = {
     "balance_datasets": True,
     "disease_adjust": [],
     "donor_models": {},
+    "exclude_genes": None,
     "chunk_size": 50000,
 }
 REQUIRED = ("output_dir", "datasets", "gene_sets")
@@ -128,10 +133,18 @@ DATASET_KEYS = {"counts", "layer", "gene_map", "donor", "match_on", "celltype", 
 
 
 def load_spec(path: Union[str, Path]) -> Dict[str, Any]:
-    """The YAML spec with defaults filled in; unknown keys are an error."""
+    """The YAML spec with defaults filled in; unknown keys are an error. With
+    `extends: <spec>` (relative to this one), that spec's keys are the base and
+    this spec's keys replace them."""
     with open(path) as f:
         raw = yaml.safe_load(f) or {}
-    unknown = set(raw) - set(DEFAULTS) - set(REQUIRED) - {"name"}
+    if raw.get("extends"):
+        with open(Path(path).parent / raw["extends"]) as f:
+            base = yaml.safe_load(f) or {}
+        if base.get("extends"):
+            raise ValueError(f"{raw['extends']} extends another spec; only one level is supported")
+        raw = {**{k: v for k, v in base.items() if k != "name"}, **raw}
+    unknown = set(raw) - set(DEFAULTS) - set(REQUIRED) - {"name", "extends"}
     if unknown:
         raise ValueError(f"Unknown key(s) in {path}: {sorted(unknown)}")
     missing = [k for k in REQUIRED if not raw.get(k)]
@@ -491,10 +504,32 @@ def _columns_for(ds: Dataset, entries: List[str]) -> Dict[str, int]:
     return {e: lookup[e] for e in entries if e in lookup}
 
 
+def _excluded_columns(ds: Dataset, entries: List[str]) -> set:
+    """Every file column of the listed genes (Ensembl IDs via the gene map, or symbols)."""
+    if sum(e.startswith("ENS") for e in entries) > len(entries) / 2:
+        if not ds.cfg.get("gene_map"):
+            raise ValueError(f"[{ds.name}] exclude_genes holds Ensembl IDs; set gene_map")
+        from ..data.genes import load_gene_map
+
+        mapping = load_gene_map(ds.cfg["gene_map"])
+        keys = [mapping.get(name, "").split(".")[0] for name in ds.var_names]
+    else:
+        keys = list(ds.var_names)
+    wanted = set(entries)
+    return {col for col, key in enumerate(keys) if key in wanted}
+
+
 def resolve_gene_sets(spec: Dict[str, Any], datasets: List[Dataset]) -> Dict[str, Dict[str, np.ndarray]]:
     """Per gene set and dataset, the file columns of its genes (aligned across
-    datasets; genes missing from any dataset are left out). Sets ds.union and
-    returns positions into it."""
+    datasets; genes missing from any dataset, or on the exclude_genes list in
+    any, are left out). Sets ds.union and returns positions into it."""
+    excluded = {ds.name: set() for ds in datasets}
+    if spec["exclude_genes"]:
+        listed = read_gene_set(spec["exclude_genes"])
+        excluded = {ds.name: _excluded_columns(ds, listed) for ds in datasets}
+        for ds in datasets:
+            logger.info(f"[{ds.name}] exclude_genes: {len(excluded[ds.name])} of {len(listed)} listed "
+                        f"genes are in the count file")
     columns: Dict[str, Dict[str, np.ndarray]] = {}
     for gs, path in spec["gene_sets"].items():
         if not Path(path).exists():
@@ -506,6 +541,10 @@ def resolve_gene_sets(spec: Dict[str, Any], datasets: List[Dataset]) -> Dict[str
         if len(shared) < len(set(entries)):
             logger.warning(f"Gene set {gs}: {len(set(entries)) - len(shared)} of {len(set(entries))} "
                            f"genes are missing from a dataset; using {len(shared)}")
+        kept = [e for e in shared if not any(f[e] in excluded[ds.name] for ds, f in zip(datasets, found))]
+        if spec["exclude_genes"]:
+            logger.info(f"Gene set {gs}: {len(shared) - len(kept)} genes on the exclude_genes list left out")
+        shared = kept
         if len(shared) < spec["n_pcs"] + 1:
             logger.warning(f"Gene set {gs}: only {len(shared)} genes (skipped)")
             continue

@@ -1,0 +1,7 @@
+# rosmap_mit.yaml without the genes on chromosomes X and Y (both references'),
+# to see how much of the sex share of the donor effect those genes carry.
+# The list comes from slurm/gene_maps.sh.
+#   sbatch slurm/batch_effects.sh config/batch_effects/rosmap_mit_no_xy.yaml
+extends: rosmap_mit.yaml
+output_dir: data/v2/batch_effects/rosmap_mit_no_xy
+exclude_genes: data/v2/reference/sex_chromosome_gene_ids.txt

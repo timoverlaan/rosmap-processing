@@ -7,6 +7,7 @@ import pytest
 
 from rosmap_processing.data.genes import (
     build_gene_map,
+    genes_on_chromosomes,
     make_unique,
     read_reference_genes,
     shared_gene_ids,
@@ -106,3 +107,18 @@ def test_shared_gene_ids(tmp_path):
     c = tmp_path / "c.tsv"
     pd.DataFrame({"var_name": ["X"], "gene_id": ["E2"]}).to_csv(c, sep="\t", index=False)
     assert shared_gene_ids(a, b, c) == ["E2"]
+
+
+def test_genes_on_chromosomes(tmp_path):
+    def line(chrom, gene_id, feature="gene"):
+        return "\t".join([chrom, "TEST", feature, "1", "100", ".", "+", ".", f'gene_id "{gene_id}";']) + "\n"
+
+    ens = tmp_path / "ens93.gtf.gz"
+    gencode = tmp_path / "gencode32.gtf.gz"
+    _write(ens, [line("1", "ENSG01"), line("X", "ENSG02"), line("X", "ENSG02", "transcript"),
+                 line("Y", "ENSG03")])
+    # GENCODE names chromosomes chrX; the chrY copy of a PAR gene is the X gene
+    _write(gencode, [line("chrX", "ENSG02.4"), line("chrX", "ENSG04.1"), line("chrY", "ENSG04.1_PAR_Y"),
+                     line("chrM", "ENSG05.1")])
+    assert genes_on_chromosomes([ens, gencode], ["X", "Y"]) == ["ENSG02", "ENSG03", "ENSG04"]
+    assert genes_on_chromosomes([gencode], ["chrY"]) == ["ENSG04"]

@@ -15,6 +15,8 @@ went through (R `make.unique` or anndata's `-1` suffixes), and maps each
 dataset gene to its Ensembl ID. When the rebuilt list equals the dataset's genes
 in order, the map is exact by position; otherwise genes are matched by name and
 the unmatched ones are reported.
+
+It also lists the genes on given chromosomes (e.g. X and Y, to leave them out).
 """
 
 import gzip
@@ -290,3 +292,33 @@ def write_shared_gene_ids(
     names = ", ".join(Path(m).name for m in maps)
     logger.info(f"Wrote {output_path}: {len(shared)} Ensembl IDs shared by {names}")
     return shared
+
+
+def genes_on_chromosomes(gtf_paths: Sequence[Union[str, Path]], chromosomes: Sequence[str]) -> List[str]:
+    """Ensembl IDs (no version or _PAR_Y suffix) of every gene on the given
+    chromosomes ('X' and 'chrX' alike) in any of the GTFs, in GTF order."""
+    unprefixed = lambda c: c[3:] if c.startswith("chr") else c
+    wanted = {unprefixed(c) for c in chromosomes}
+    ids: Dict[str, None] = {}
+    for path in gtf_paths:
+        with _open_text(path) as fh:
+            for line in fh:
+                if line.startswith("#"):
+                    continue
+                parts = line.split("\t", 8)
+                if len(parts) < 9 or parts[2] != "gene" or unprefixed(parts[0]) not in wanted:
+                    continue
+                attrs, _ = _parse_attributes(parts[8])
+                ids.setdefault(strip_version(attrs["gene_id"]).split("_")[0], None)
+    return list(ids)
+
+
+def write_chromosome_genes(
+    gtf_paths: Sequence[Union[str, Path]], chromosomes: Sequence[str], output_path: Union[str, Path]
+) -> List[str]:
+    ids = genes_on_chromosomes(gtf_paths, chromosomes)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(ids) + "\n")
+    logger.info(f"Wrote {output_path}: {len(ids)} Ensembl IDs on chromosome(s) {', '.join(chromosomes)}")
+    return ids

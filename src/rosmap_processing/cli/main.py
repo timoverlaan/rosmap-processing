@@ -134,6 +134,11 @@ def main():
     shared_parser.add_argument("maps", type=str, nargs="+", help="Gene map TSVs (output order follows the first)")
     shared_parser.add_argument("--output", type=str, required=True, help="Output TXT (one Ensembl ID per line)")
 
+    chrom_parser = genes_subparsers.add_parser("on-chromosomes", help="Ensembl IDs of the genes on given chromosomes")
+    chrom_parser.add_argument("--gtf", type=str, nargs="+", required=True, help="GTF(s); the union of their genes")
+    chrom_parser.add_argument("--chromosomes", type=str, nargs="+", required=True, help="e.g. X Y (or chrX chrY)")
+    chrom_parser.add_argument("--output", type=str, required=True, help="Output TXT (one Ensembl ID per line)")
+
     # Pipeline commands
     pipeline_parser = subparsers.add_parser("pipeline", help="Processing pipeline commands")
     pipeline_subparsers = pipeline_parser.add_subparsers(dest="pipeline_command", required=True)
@@ -381,6 +386,9 @@ def handle_genes_command(args):
     elif args.genes_command == "shared":
         from rosmap_processing.data.genes import write_shared_gene_ids
         write_shared_gene_ids(args.maps, args.output)
+    elif args.genes_command == "on-chromosomes":
+        from rosmap_processing.data.genes import write_chromosome_genes
+        write_chromosome_genes(args.gtf, args.chromosomes, args.output)
 
 
 def handle_pipeline_command(args):
