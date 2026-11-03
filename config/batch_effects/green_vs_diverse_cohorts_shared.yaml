@@ -1,0 +1,66 @@
+# Protocol effect Green 2024 vs DiverseCohorts (10x multiome, DLPFC) on the
+# ROS and MAP participants in both, matched on individualID, as in
+# mit_vs_diverse_cohorts_shared.yaml.
+#   sbatch slurm/batch_effects.sh config/batch_effects/green_vs_diverse_cohorts_shared.yaml
+output_dir: data/v2/batch_effects/green_vs_diverse_cohorts_shared
+max_cells_per_donor: 300
+match_donors: true
+disease_adjust: [sex, age]
+
+datasets:
+  rosmap_green:
+    counts: data/v2/counts/ROSMAP/combined.h5ad
+    gene_map: data/v2/reference/rosmap_green_gene_map.tsv
+    donor: individualID
+    match_on: individualID
+    celltype:
+      - {column: source_file, match: "cux2", label: Exc}
+      - {column: source_file, match: "/inhibitory", label: Inh}
+      - {column: source_file, match: "/astrocytes", label: Ast}
+      - {column: subset, match: "OPC|precursor", label: OPC}
+      - {column: source_file, match: "oligodendroglia", label: Oli}
+      - {column: source_file, match: "microglia", label: Mic}
+      - {column: source_file, match: "vascular", label: Vasc}
+    covariates:
+      diagnosis: {column: cogdx}
+      sex: {column: msex}
+      age: {column: age_death, numeric: true}
+      braak: {column: braaksc, numeric: true}
+      cerad: {column: ceradsc, numeric: true, recode: {"1": 3, "2": 2, "3": 1, "4": 0}}
+      apoe4: {column: apoe_genotype, numeric: true, recode: {"22": 0, "23": 0, "33": 0, "24": 1, "34": 1, "44": 2}}
+    disease: {column: cogdx, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
+  diverse_cohorts:
+    counts: data/v2/counts/DiverseCohorts/combined.h5ad
+    gene_map: data/v2/reference/diverse_cohorts_gene_map.tsv
+    donor: individualID
+    match_on: individualID
+    celltype:
+      - {column: broadcellclass, match: "^Glut", label: Exc}
+      - {column: broadcellclass, match: "^Gaba", label: Inh}
+      - {column: broadcellclass, match: "^Astro", label: Ast}
+      - {column: broadcellclass, match: "^Opc", label: OPC}
+      - {column: broadcellclass, match: "^Olig", label: Oli}
+      - {column: broadcellclass, match: "^Micro", label: Mic}
+      - {column: broadcellclass, match: "^Endo", label: Vasc}
+    covariates:
+      diagnosis: {column: cogdx_rush}
+      sex: {column: sex, recode: {female: "0", male: "1"}}
+      age: {column: ageDeath, numeric: true}
+      braak: {column: braak_rush, numeric: true}
+      cerad: {column: cerad_rush, numeric: true, recode: {"1": 3, "2": 2, "3": 1, "4": 0}}
+      apoe4: {column: apoeGenotype, numeric: true, recode: {"22": 0, "23": 0, "33": 0, "24": 1, "34": 1, "44": 2}}
+    disease: {column: cogdx_rush, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
+
+donor_models:
+  sex_age: [sex, age]
+  sex_age_apoe4: [sex, age, apoe4]
+  pathology: [braak, cerad]
+  dementia_pathology: [disease, braak, cerad]
+  all: [sex, age, apoe4, disease, braak, cerad]
+
+gene_sets:
+  mit_seurat_v3_donor_2000_3way: data/v2/processed/rosmap_mit_hvg2000_3way_k30.h5ad
+  mit_seurat_v3_donor_2000: data/v2/processed/rosmap_mit_hvg2000_k30.h5ad
+  mit_seurat_donor_2000: data/v2/processed/rosmap_mit_hvg2000_postnorm_k30.h5ad
+  green_seurat_v3_donor_2000: data/v2/processed/rosmap_green_hvg2000_k30.h5ad
+  green_seurat_donor_2000: data/v2/processed/rosmap_green_hvg2000_postnorm_k30.h5ad

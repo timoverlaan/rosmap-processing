@@ -10,9 +10,12 @@ classes, and Rush's cogdx/Braak/CERAD). The 2023 matrices have no such table
 for their cells and are not used.
 
 `annotate` keeps the cells that are in the cell table and from the chosen
-region, and adds donor metadata: the DiverseCohorts individual metadata, projid
-(the Rush mapping), and the ROSMAP clinical columns joined on projid, so the
-covariates have the same definitions as in the ROSMAP atlases.
+region, and adds donor metadata: the DiverseCohorts individual metadata (age,
+APOE, race, cohort, ... for every donor), projid (Rush mapping) and, where the
+donor is a ROS or MAP participant, the ROSMAP clinical columns. A Rush donor's
+individualID is the ROSMAP one, so the clinical CSV is joined on it; most
+DiverseCohorts donors are from MARS and CLINCORE, which it does not cover.
+Rush's cogdx, Braak and CERAD are in the cell table for every donor.
 """
 
 from pathlib import Path
@@ -37,9 +40,9 @@ CELL_COLUMNS = ["individualID", "specimenID", "region", "batch", "broadcellclass
 # From the individual metadata; 'sex' is already in the cell table
 DONOR_COLUMNS = ["dataContributionGroup", "cohort", "race", "isHispanic", "ageDeath", "PMI",
                  "apoeGenotype", "amyCerad", "Braak", "reag", "ADoutcome"]
-# ROSMAP clinical columns that would clash: race is coded differently there,
-# and its individualID is kept as rosmap_individualID
-CLINICAL_RENAME = {"race": "rosmap_race", "individualID": "rosmap_individualID"}
+# ROSMAP clinical columns that would clash: race is coded differently there;
+# its projid is kept to check the Rush mapping
+CLINICAL_RENAME = {"race": "rosmap_race", "projid": "rosmap_projid"}
 
 
 def read_cell_table(path: Union[str, Path]) -> pd.DataFrame:
@@ -53,7 +56,8 @@ def read_cell_table(path: Union[str, Path]) -> pd.DataFrame:
 
 def donor_table(download_dir: Union[str, Path], clinical: Optional[Union[str, Path]] = None) -> pd.DataFrame:
     """One row per DiverseCohorts individualID: individual metadata, projid
-    (Rush mapping, as text without leading zeros) and the ROSMAP clinical columns."""
+    (Rush mapping, else the clinical CSV's; as text without leading zeros) and
+    the ROSMAP clinical columns (joined on individualID)."""
     download_dir = Path(download_dir)
     donors = pd.read_csv(download_dir / INDIVIDUAL_METADATA, usecols=["individualID"] + DONOR_COLUMNS)
     mapping = pd.read_csv(download_dir / PROJID_MAPPING)
@@ -63,10 +67,15 @@ def donor_table(download_dir: Union[str, Path], clinical: Optional[Union[str, Pa
     donors = donors.merge(mapping[["individualID", "projid"]], on="individualID", how="left")
     if clinical is not None:
         table = pd.read_csv(clinical, low_memory=False).rename(columns=CLINICAL_RENAME)
-        table["projid"] = normalize_projid(table["projid"])
-        if table["projid"].duplicated().any():
-            raise ValueError(f"{clinical}: duplicate projid")
-        donors = donors.merge(table, on="projid", how="left")
+        table["rosmap_projid"] = normalize_projid(table["rosmap_projid"])
+        if table["individualID"].duplicated().any():
+            raise ValueError(f"{clinical}: duplicate individualID")
+        donors = donors.merge(table, on="individualID", how="left")
+        both = donors["projid"].notna() & donors["rosmap_projid"].notna()
+        differ = int((donors.loc[both, "projid"] != donors.loc[both, "rosmap_projid"]).sum())
+        if differ:
+            raise ValueError(f"The Rush mapping and {clinical} give different projids for {differ} donors")
+        donors["projid"] = donors["projid"].fillna(donors.pop("rosmap_projid"))
     return donors
 
 
@@ -104,9 +113,7 @@ def annotate(
     logger.info(f"{n_donors} donors; {with_projid} with a projid")
     if clinical is not None:
         with_clinical = obs.loc[obs["cogdx"].notna(), "individualID"].nunique() if "cogdx" in obs else 0
-        same_id = (obs["rosmap_individualID"] == obs["individualID"]).groupby(obs["individualID"]).first()
-        logger.info(f"{with_clinical} donors have ROSMAP clinical data; for {int(same_id.sum())} the ROSMAP "
-                    f"individualID is the DiverseCohorts one")
+        logger.info(f"{with_clinical} donors have ROSMAP clinical data")
         agree = (obs["cogdx"].astype(float) == obs["cogdx_rush"].astype(float)) | obs["cogdx"].isna()
         logger.info(f"cogdx and cogdx_rush differ for {obs.loc[~agree, 'individualID'].nunique()} donors")
     # Text columns (including ages like "90+") as categoricals, which h5ad

@@ -1,8 +1,10 @@
 #!/bin/bash
-# Map ROSMAP-MIT, SeaAD and Green 2024 gene symbols to Ensembl IDs, and list
-# the IDs shared by MIT + SeaAD and by all three, and the genes on X and Y.
+# Map ROSMAP-MIT, SeaAD, Green 2024, DiverseCohorts and PsychAD gene symbols
+# to Ensembl IDs, and list the IDs shared by MIT + SeaAD and by MIT, SeaAD and
+# Green, and the genes on X and Y.
 # Needs data/reference/ (bash slurm/download_references.sh) and
-# data/v2/counts/{ROSMAP_MIT,ROSMAP}/combined.h5ad (sbatch slurm/run_all.sh).
+# data/v2/counts/{ROSMAP_MIT,ROSMAP}/combined.h5ad (sbatch slurm/run_all.sh);
+# the DiverseCohorts and PsychAD maps are made once their counts exist.
 # Submit from the repo root: sbatch slurm/gene_maps.sh
 #SBATCH --account=daic-eemcs-insy-prb
 #SBATCH --partition=all
@@ -44,3 +46,11 @@ skip_if_exists "$REF/shared_gene_ids_3way.txt" \
 skip_if_exists "$REF/sex_chromosome_gene_ids.txt" \
     rp genes on-chromosomes --gtf "$ENS93" "$GENCODE32" --chromosomes X Y \
         --output "$REF/sex_chromosome_gene_ids.txt"
+
+# DiverseCohorts: Cell Ranger ARC's GRCh38-2020-A-2.0.0, the same GENCODE v32
+# gene list; the matrices keep 27,984 of its genes, so this is name matching.
+if [ -e "$DC_COUNTS" ]; then
+    skip_if_exists "$REF/diverse_cohorts_gene_map.tsv" \
+        rp genes build-map --gtf "$GENCODE32" --recipe cellranger-GRCh38-2020-A \
+            --h5ad "$DC_COUNTS" --output "$REF/diverse_cohorts_gene_map.tsv"
+fi

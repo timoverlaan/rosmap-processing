@@ -80,6 +80,8 @@ skip_if_exists() {
 # Inputs and gene maps (gene maps from slurm/gene_maps.sh)
 MIT_COUNTS="$V2/counts/ROSMAP_MIT/combined.h5ad"
 GREEN_COUNTS="$V2/counts/ROSMAP/combined.h5ad"
+DC_COUNTS="$V2/counts/DiverseCohorts/combined.h5ad"
+PSYCHAD_COUNTS="$V2/counts/PsychAD/combined.h5ad"
 REF="$V2/reference"
 OUT="$V2/processed"
 # Green 2024 has no projid of its own; its individualID is complete.

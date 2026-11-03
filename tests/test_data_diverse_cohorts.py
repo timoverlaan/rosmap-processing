@@ -35,7 +35,8 @@ def download_dir(tmp_path):
         individual[col] = ["90+", "85", "77"] if col == "ageDeath" else ["x", "y", "z"]
     individual.to_csv(d / dc.INDIVIDUAL_METADATA, index=False)
     pd.DataFrame({"individualID": ["R1", "R3"], "projid": [12345, 20000001]}).to_csv(d / dc.PROJID_MAPPING, index=False)
-    clinical = pd.DataFrame({"projid": ["00012345", "20000001"], "individualID": ["R1", "ROS9"],
+    # R3 is not in the clinical CSV (a MARS donor, say); R2 has no Rush mapping
+    clinical = pd.DataFrame({"projid": ["00012345", "00000777"], "individualID": ["R1", "R2"],
                              "cogdx": [1.0, 5.0], "msex": [0, 1], "race": [1, 2]})
     clinical.to_csv(tmp_path / "clinical.csv", index=False)
     return d
@@ -61,11 +62,23 @@ def test_annotate_keeps_region_cells_with_donor_metadata(download_dir, tmp_path)
     assert out.obs_names.tolist() == ["VR001_AAAC-1", "VR002_AAAC-1", "VR001_AAAG-1"]
     np.testing.assert_array_equal(out.X.toarray(), counts[[0, 2, 4]])
     assert out.obs["individualID"].tolist() == ["R1", "R3", "R1"]
-    # projid without the clinical CSV's zero padding, and the clinical columns joined on it
+    # projid without zero padding; the clinical columns joined on individualID (R3 has none)
     assert out.obs["projid"].tolist() == ["12345", "20000001", "12345"]
-    assert out.obs["cogdx"].tolist() == [1.0, 5.0, 1.0]
-    assert out.obs["rosmap_individualID"].tolist() == ["R1", "ROS9", "R1"]
+    np.testing.assert_array_equal(out.obs["cogdx"].to_numpy(), [1.0, np.nan, 1.0])
     assert "rosmap_race" in out.obs and out.obs["ageDeath"].tolist() == ["90+", "77", "90+"]
+
+
+def test_projid_from_clinical_when_not_mapped(download_dir, tmp_path):
+    donors = dc.donor_table(download_dir, tmp_path / "clinical.csv").set_index("individualID")
+    assert donors.loc["R2", "projid"] == "777" and donors.loc["R3", "projid"] == "20000001"
+
+
+def test_conflicting_projids_are_an_error(download_dir, tmp_path):
+    clinical = pd.read_csv(tmp_path / "clinical.csv", dtype={"projid": str})
+    clinical.loc[0, "projid"] = "00099999"
+    clinical.to_csv(tmp_path / "clinical.csv", index=False)
+    with pytest.raises(ValueError, match="different projids"):
+        dc.donor_table(download_dir, tmp_path / "clinical.csv")
 
 
 def test_annotate_all_regions(download_dir, tmp_path):

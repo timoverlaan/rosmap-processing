@@ -1,0 +1,64 @@
+# Batch effects within DiverseCohorts (AMP-AD; Rush ROS, MAP, MARS and
+# CLINCORE donors; 10x multiome gene expression, DLPFC cells only): library
+# pool vs donor, cell type and donor covariates, on the gene sets of the
+# MIT/SeaAD pairs (genes matched by Ensembl ID; ones DiverseCohorts lacks are
+# left out of a set, logged).
+#   sbatch slurm/batch_effects.sh config/batch_effects/diverse_cohorts.yaml
+output_dir: data/v2/batch_effects/diverse_cohorts
+max_cells_per_donor: 300
+
+datasets:
+  diverse_cohorts:
+    counts: data/v2/counts/DiverseCohorts/combined.h5ad
+    gene_map: data/v2/reference/diverse_cohorts_gene_map.tsv
+    donor: individualID
+    # The authors' broad classes (cell table); ependymal cells and the few
+    # other immune cells are left out
+    celltype:
+      - {column: broadcellclass, match: "^Glut", label: Exc}
+      - {column: broadcellclass, match: "^Gaba", label: Inh}
+      - {column: broadcellclass, match: "^Astro", label: Ast}
+      - {column: broadcellclass, match: "^Olig", label: Oli}
+      - {column: broadcellclass, match: "^Opc", label: OPC}
+      - {column: broadcellclass, match: "^Micro", label: Mic}
+      - {column: broadcellclass, match: "^Endo", label: Vasc}
+    # The library pool (three specimens of different donors). A donor has one
+    # DLPFC specimen, so within the DLPFC the pool groups whole donors.
+    batch: [batch]
+    # Rush's cogdx, Braak and CERAD (cell table) and the DiverseCohorts
+    # individual metadata cover every donor; the ROSMAP clinical columns only
+    # the ROS and MAP participants
+    covariates:
+      cohort: {column: cohort}
+      diagnosis: {column: cogdx_rush}
+      sex: {column: sex}
+      age: {column: ageDeath, numeric: true}
+      pmi: {column: PMI, numeric: true}
+      race: {column: race}
+      braak: {column: braak_rush, numeric: true}
+      # CERAD as 0 none - 3 frequent plaques, as in rosmap_mit.yaml
+      cerad: {column: cerad_rush, numeric: true, recode: {"1": 3, "2": 2, "3": 1, "4": 0}}
+      apoe4: {column: apoeGenotype, numeric: true, recode: {"22": 0, "23": 0, "33": 0, "24": 1, "34": 1, "44": 2}}
+    # Disease signal (disease.tsv): dementia, cogdx 4-6 vs 1-3, as for MIT and Green
+    disease: {column: cogdx_rush, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
+disease_adjust: [sex, age]
+# Donor effect (donor_effect.tsv), as in rosmap_mit.yaml
+donor_models:
+  sex_age: [sex, age]
+  sex_age_apoe4: [sex, age, apoe4]
+  pathology: [braak, cerad]
+  dementia_pathology: [disease, braak, cerad]
+  all: [sex, age, apoe4, disease, braak, cerad]
+
+gene_sets:
+  seurat_v3_donor_1000: data/v2/processed/rosmap_mit_hvg1000_k30.h5ad
+  seurat_v3_donor_2000: data/v2/processed/rosmap_mit_hvg2000_k30.h5ad
+  seurat_v3_donor_3000: data/v2/processed/rosmap_mit_hvg3000_k30.h5ad
+  seurat_donor_1000: data/v2/processed/rosmap_mit_hvg1000_postnorm_k30.h5ad
+  seurat_donor_2000: data/v2/processed/rosmap_mit_hvg2000_postnorm_k30.h5ad
+  seurat_donor_3000: data/v2/processed/rosmap_mit_hvg3000_postnorm_k30.h5ad
+  seurat_v3_donor_2000_3way: data/v2/processed/rosmap_mit_hvg2000_3way_k30.h5ad
+  lieke_hvg: data/v2/processed/rosmap_mit_lieke_hvg_k30.h5ad
+  lieke_allgenes_seurat_v3_2000: data/v2/processed/rosmap_mit_lieke_allgenes_hvg2k_k30.h5ad
+  lieke_allgenes_seurat_2000: data/v2/processed/rosmap_mit_lieke_allgenes_hvg2k_postnorm_k30.h5ad
+  mathys2019_degs: data/v2/processed/rosmap_mit_mathys2019degs_k30.h5ad
