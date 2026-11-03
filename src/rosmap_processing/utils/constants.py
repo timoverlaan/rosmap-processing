@@ -56,6 +56,57 @@ SYNAPSE_IDS_ROSMAP_MIT = {
     "individual_metadata": "syn52430346",
 }
 
+# Synapse IDs for PsychAD (MSSM_PsychAD in the AD Knowledge Portal, Lee et al.
+# 2024): the h5ad after the authors' QC, and the donor metadata
+SYNAPSE_IDS_PSYCHAD = {
+    "h5ad": "syn68559919",
+    "h5ad_raw_no_qc": "syn68554605",  # Before QC (106 GB, only with --include-raw-h5ad)
+    "individual_metadata": "syn55251012",
+    "biospecimen_metadata": "syn55251032",
+    "neuropathology_diagnosis": "syn74913889",
+    "neuropathology_dictionary": "syn57373364",
+    "hashing_metadata": "syn53446426",
+    "assay_metadata": "syn57341886",
+    "donor_id_mapping": "syn62808264",
+    "deidentified_donors": "syn68498949",
+}
+
+# Synapse IDs for AMP-AD_DiverseCohorts: the gene expression part of the 10x
+# multiome (filtered counts per cell class, and the later gene expression
+# matrices per subclass), and the donor metadata. The ATAC files are not used.
+SYNAPSE_IDS_DIVERSE_COHORTS = {
+    "counts_astro": "syn52138701",
+    "counts_endo": "syn52138703",
+    "counts_epend": "syn52138711",
+    "counts_gaba": "syn52138732",
+    "counts_glut": "syn52138744",
+    "counts_micro": "syn52138745",
+    "counts_olig": "syn55446335",
+    "counts_opc": "syn52138751",
+    "counts_other_immune": "syn52138752",
+    "gex_astro": "syn71722418",
+    "gex_endo": "syn71722427",
+    "gex_epend": "syn71722437",
+    "gex_gad1": "syn71722501",
+    "gex_gad2": "syn71722506",
+    "gex_glut1": "syn71722509",
+    "gex_glut2": "syn71722518",
+    "gex_glut3": "syn71722534",
+    "gex_glut4": "syn71722579",
+    "gex_micro": "syn71722580",
+    "gex_olig1": "syn71722585",
+    "gex_olig2": "syn71722588",
+    "gex_opc": "syn71722591",
+    "individual_metadata": "syn51757646",
+    "biospecimen_metadata": "syn51757645",
+    "assay_multiome_metadata": "syn53649030",
+    "rush_projid_mapping": "syn55128291",
+    "extended_neuropath": "syn61089081",
+    "data_dictionary": "syn51757664",
+    "data_dictionary_neuropath": "syn61089558",
+    "outcomes": "syn51757663",
+}
+
 
 class SynapseFile(NamedTuple):
     """A pinned Synapse file: local file name, version, MD5 and size in bytes."""
@@ -102,10 +153,52 @@ SYNAPSE_FILES = {
     "syn52368902": SynapseFile("MIT_ROSMAP_Multiomics_assay_snRNAseq_metadata.csv", 5, "a029c558c796b47c6c52e94ae2bd74a4", 532555),
     "syn52430345": SynapseFile("MIT_ROSMAP_Multiomics_biospecimen_metadata.csv", 2, "7fbb7a0e29f639b3f91ba7aed1295c81", 541180),
     "syn52430346": SynapseFile("MIT_ROSMAP_Multiomics_individual_metadata.csv", 3, "7a825d858470ea50400d1596f6e54087", 27192),
+    # PsychAD, Lee et al. 2024 (pinned 2026-11-03)
+    "syn68559919": SynapseFile("merged_final_clean.h5ad", 2, "8e45971c37cc65f04c5b3f73770d16f5", 113394136209),
+    "syn68554605": SynapseFile("merged_raw_no_qc.h5ad", 2, "2b8609f60568c54639e9f3a9ce6eaf86", 106118643495),
+    "syn55251012": SynapseFile("NPS-AD_individual_metadata.csv", 9, "6f8b814195a3eed3818ed7a394b8fb9c", 464473),
+    "syn55251032": SynapseFile("NPS-AD_biospecimen_metadata.csv", 4, "a0770eb197260e5216dc180a8ef00ad0", 304014),
+    "syn74913889": SynapseFile("NPS-AD_neuropathology_and_diagnosis_metadata.csv", 3, "8ed554cb2d5882c8ffd1cc94cefbf78e", 147581),
+    "syn57373364": SynapseFile("NPS-AD_neuropathology_diagnosis_data_dictionary.pdf", 2, "0c78f4b66c0d7d30242cb5c594381d38", 56842),
+    "syn53446426": SynapseFile("NPS-AD_nucleus_hashing_metadata.csv", 6, "a4b2d769f1b02fd2250ae2375477fd3c", 826279),
+    "syn57341886": SynapseFile("NPS-AD_snRNAseq_assay_metadata.csv", 4, "9855fd26900b5124fdb4f03ea16df7a1", 324059),
+    "syn62808264": SynapseFile("NPS-AD_DonorID_mapping.csv", 3, "8db47327c70fe0cd5a04d867790270ee", 28892),
+    "syn68498949": SynapseFile("de-identify_AllDonors_simple.csv", 4, "b296e9e86d1bc6fc4a0e94935f1500e5", 46246),
+    # AMP-AD_DiverseCohorts (pinned 2026-11-03)
+    "syn52138701": SynapseFile("counts_Astro_filtered.rds", 2, "1540fb5bc49c2fcff1b58fa5d25f6e5a", 1136644278),
+    "syn52138703": SynapseFile("counts_Endo_filtered.rds", 2, "b808b94573407a4d7d6f3659a32daf73", 144873133),
+    "syn52138711": SynapseFile("counts_Epend_filtered.rds", 2, "1023427aef218e675108374cf9330b96", 61379706),
+    "syn52138732": SynapseFile("counts_Gaba_filtered.rds", 2, "977cb2c94ebe15a024300089609d6a8a", 2985174589),
+    "syn52138744": SynapseFile("counts_Glut_filtered.rds", 2, "91d8451eab67884f8c16796b7122ed8d", 4500865811),
+    "syn52138745": SynapseFile("counts_Micro_filtered.rds", 2, "c3a75277adc80c940a93c4f663d7f2c8", 361854107),
+    "syn55446335": SynapseFile("counts_Olig_filtered.rds", 2, "9a156f1b86e97d350cbee61e2f069ca2", 2279492674),
+    "syn52138751": SynapseFile("counts_Opc_filtered.rds", 2, "4531dd38960894856698b0109cc25bd7", 370599733),
+    "syn52138752": SynapseFile("counts_OtherImmune_filtered.rds", 2, "cb240a5662cf287b32a95222d417dd04", 10823490),
+    "syn71722418": SynapseFile("gex_mat_Astro.rda", 2, "efc6b246d926b501b5faf58b8e2293c8", 4092103846),
+    "syn71722427": SynapseFile("gex_mat_Endo.rda", 2, "6220a052be91dae98fd2ad2372e2f6d2", 993699602),
+    "syn71722437": SynapseFile("gex_mat_Epend.rda", 2, "0e7b6308346e6bce4a0dad9ca0ad6a4e", 433205871),
+    "syn71722501": SynapseFile("gex_mat_Gad1.rda", 2, "c747c5a7b219526ba2b156abc39832dc", 5060497765),
+    "syn71722506": SynapseFile("gex_mat_Gad2.rda", 2, "ac51d052a428799d3131f7feb5d9d629", 4316680072),
+    "syn71722509": SynapseFile("gex_mat_Glut1.rda", 2, "663444bbb6e482665c421e31fe694c35", 4951859862),
+    "syn71722518": SynapseFile("gex_mat_Glut2.rda", 2, "3daee380d939c381d02e2918f8b47cc9", 4357006421),
+    "syn71722534": SynapseFile("gex_mat_Glut3.rda", 2, "4865e44cae8db578d93a4129d9d746aa", 3958081346),
+    "syn71722579": SynapseFile("gex_mat_Glut4.rda", 2, "cdb66186adb7f76816b268a1270e0865", 4198494011),
+    "syn71722580": SynapseFile("gex_mat_Micro.rda", 2, "13025a47a7fa8b2165fe6d1d75933ecf", 1536175278),
+    "syn71722585": SynapseFile("gex_mat_Olig1.rda", 2, "2981f8e5a15d295974421877c25a8ad2", 3239210039),
+    "syn71722588": SynapseFile("gex_mat_Olig2.rda", 2, "abadc0ee5607dd0fee68078221251ef9", 2911968239),
+    "syn71722591": SynapseFile("gex_mat_Opc.rda", 2, "9632a427ebba2f5920c038646dc44ddb", 1643163991),
+    "syn51757646": SynapseFile("AMP-AD_DiverseCohorts_individual_metadata.csv", 22, "82e8473a617dc84312201e26be0855c3", 359693),
+    "syn51757645": SynapseFile("AMP-AD_DiverseCohorts_biospecimen_metadata.csv", 15, "8d5c3cf33864c24bdc38586e63d67a08", 651374),
+    "syn53649030": SynapseFile("AMP-AD_DiverseCohorts_assay_multiome_metadata.csv", 6, "5022b2010dcba1735a80775aafd61aa8", 78640),
+    "syn55128291": SynapseFile("AMP-AD_DiverseCohorts_Rush_projid_mapping.csv", 3, "b7c464d80757433e3bb72bdc151b51d6", 6482),
+    "syn61089081": SynapseFile("Harmonized_Extended_Neuropath_Diverse_Cohorts.csv", 3, "8544d084b5d02e34edc6fb8cb25cf776", 91462),
+    "syn51757664": SynapseFile("DiverseCohorts_DataDictionary.pdf", 2, "31c795101132552349f0eff21880f3d0", 75905),
+    "syn61089558": SynapseFile("DiverseCohorts_DataDictionary_ExtNeuropath.pdf", 3, "aa54632b12e0f5371ce85ffa9354e2eb", 99611),
+    "syn51757663": SynapseFile("DiverseCohortsOutcomes.pdf", 2, "bca81fd587465007f143bce5be369579", 52960),
 }
 
 # Large files that are only downloaded on request.
-SYNAPSE_OPTIONAL = {"syn52392369"}
+SYNAPSE_OPTIONAL = {"syn52392369", "syn68554605"}
 
 # File extensions
 VALID_H5AD_EXTENSIONS = [".h5ad"]
@@ -181,6 +274,8 @@ __all__ = [
     # Synapse IDs
     "SYNAPSE_IDS_ROSMAP",
     "SYNAPSE_IDS_ROSMAP_MIT",
+    "SYNAPSE_IDS_PSYCHAD",
+    "SYNAPSE_IDS_DIVERSE_COHORTS",
     "SynapseFile",
     "SYNAPSE_FILES",
     "SYNAPSE_OPTIONAL",

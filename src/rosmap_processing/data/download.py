@@ -1,4 +1,4 @@
-"""Download ROSMAP data from Synapse, pinned to versions and checked by MD5.
+"""Download ROSMAP, PsychAD and DiverseCohorts data from Synapse, pinned to versions and checked by MD5.
 
 Every file is listed in `utils.constants.SYNAPSE_FILES` with its version, MD5
 and size. A file that is already present is checked and kept if it matches; if
@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from rosmap_processing.utils.constants import (
     SYNAPSE_FILES,
+    SYNAPSE_IDS_DIVERSE_COHORTS,
+    SYNAPSE_IDS_PSYCHAD,
     SYNAPSE_IDS_ROSMAP,
     SYNAPSE_IDS_ROSMAP_MIT,
     SYNAPSE_OPTIONAL,
@@ -27,6 +29,8 @@ logger = get_logger(__name__)
 DATASETS = {
     "rosmap": ("ROSMAP", SYNAPSE_IDS_ROSMAP),
     "rosmap-mit": ("ROSMAP_MIT", SYNAPSE_IDS_ROSMAP_MIT),
+    "psychad": ("PsychAD", SYNAPSE_IDS_PSYCHAD),
+    "diverse-cohorts": ("DiverseCohorts", SYNAPSE_IDS_DIVERSE_COHORTS),
 }
 
 
@@ -161,7 +165,7 @@ def download_dataset(
     synapse_config=None,
     include_optional: bool = False,
 ) -> List[Path]:
-    """Download one dataset ('rosmap' or 'rosmap-mit') into output_base/<ROSMAP|ROSMAP_MIT>."""
+    """Download one dataset (a key of DATASETS) into output_base/<its directory>."""
     subdir, synapse_ids = DATASETS[dataset]
     logger.info("=" * 60)
     logger.info(f"Downloading {dataset} into {Path(output_base) / subdir}")

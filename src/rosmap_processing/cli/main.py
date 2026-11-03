@@ -13,6 +13,9 @@ from rosmap_processing.utils.constants import (
 )
 from rosmap_processing.utils.logging import setup_logging, get_logger
 
+# Keys of data.download.DATASETS (kept here so the parser needs no imports)
+DATASET_NAMES = ("rosmap", "rosmap-mit", "psychad", "diverse-cohorts")
+
 
 def main():
     """Main entry point for CLI."""
@@ -50,18 +53,20 @@ def main():
     download_parser = data_subparsers.add_parser(
         "download", help="Download pinned Synapse file versions (MD5-checked; present files are verified, never overwritten)"
     )
-    download_parser.add_argument("--dataset", choices=["rosmap", "rosmap-mit", "all"], default="all",
+    download_parser.add_argument("--dataset", choices=[*DATASET_NAMES, "all"], default="all",
                                  help="Which dataset to download (default: all)")
     download_parser.add_argument("--output-dir", type=str, default="data/raw",
-                                 help="Base directory; files go to <dir>/ROSMAP and <dir>/ROSMAP_MIT (default: data/raw)")
+                                 help="Base directory; files go to <dir>/ROSMAP, <dir>/ROSMAP_MIT, <dir>/PsychAD "
+                                      "and <dir>/DiverseCohorts (default: data/raw)")
     download_parser.add_argument("--include-raw-h5ad", action="store_true",
-                                 help="Also download the 103 GB unfiltered ROSMAP-MIT h5ad (syn52392369)")
+                                 help="Also download the unfiltered h5ad files: ROSMAP-MIT (103 GB, syn52392369) "
+                                      "and PsychAD before QC (106 GB, syn68554605)")
 
     # data verify
     verify_parser = data_subparsers.add_parser(
         "verify", help="Check that a directory holds the pinned Synapse files (size + MD5)"
     )
-    verify_parser.add_argument("--dataset", choices=["rosmap", "rosmap-mit"], required=True)
+    verify_parser.add_argument("--dataset", choices=DATASET_NAMES, required=True)
     verify_parser.add_argument("--dir", type=str, required=True, help="Directory with the downloaded files")
     verify_parser.add_argument("--include-raw-h5ad", action="store_true",
                                help="Also check the unfiltered ROSMAP-MIT h5ad")
@@ -303,7 +308,7 @@ def handle_data_command(args):
 
     if args.data_command == "download":
         from rosmap_processing.data.download import download_dataset
-        datasets = ["rosmap", "rosmap-mit"] if args.dataset == "all" else [args.dataset]
+        datasets = list(DATASET_NAMES) if args.dataset == "all" else [args.dataset]
         for dataset in datasets:
             download_dataset(dataset, output_base=args.output_dir, include_optional=args.include_raw_h5ad)
 

@@ -82,8 +82,16 @@ def test_verify_files_reports_problems(tmp_path, pinned):
 
 
 def test_every_configured_file_is_pinned():
-    from rosmap_processing.utils.constants import (
-        SYNAPSE_FILES, SYNAPSE_IDS_ROSMAP, SYNAPSE_IDS_ROSMAP_MIT,
-    )
-    for syn_id in [*SYNAPSE_IDS_ROSMAP.values(), *SYNAPSE_IDS_ROSMAP_MIT.values()]:
-        assert syn_id in SYNAPSE_FILES
+    from rosmap_processing.utils.constants import SYNAPSE_FILES
+
+    for _, synapse_ids in download.DATASETS.values():
+        for syn_id in synapse_ids.values():
+            assert syn_id in SYNAPSE_FILES
+    names = [spec.name for _, ids in download.DATASETS.values() for spec in map(SYNAPSE_FILES.get, ids.values())]
+    assert len(names) == len(set(names))
+
+
+def test_cli_lists_every_dataset():
+    from rosmap_processing.cli.main import DATASET_NAMES
+
+    assert set(DATASET_NAMES) == set(download.DATASETS)
