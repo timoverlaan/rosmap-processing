@@ -26,6 +26,9 @@ datasets:
       diagnosis: {column: cogdx}
       sex: {column: msex}
       age: {column: age_death, numeric: true}
+      braak: {column: braaksc, numeric: true}
+      cerad: {column: ceradsc, numeric: true, recode: {"1": 3, "2": 2, "3": 1, "4": 0}}
+      apoe4: {column: apoe_genotype, numeric: true, recode: {"22": 0, "23": 0, "33": 0, "24": 1, "34": 1, "44": 2}}
     disease: {column: cogdx, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
   rosmap_green:
     counts: data/v2/counts/ROSMAP/combined.h5ad
@@ -43,7 +46,19 @@ datasets:
       diagnosis: {column: cogdx}
       sex: {column: msex}
       age: {column: age_death, numeric: true}
+      braak: {column: braaksc, numeric: true}
+      cerad: {column: ceradsc, numeric: true, recode: {"1": 3, "2": 2, "3": 1, "4": 0}}
+      apoe4: {column: apoe_genotype, numeric: true, recode: {"22": 0, "23": 0, "33": 0, "24": 1, "34": 1, "44": 2}}
     disease: {column: cogdx, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
+
+# Donor effect (donor_effect.tsv): the share of the donor variation that both
+# atlases reproduce, and how much of it the covariates explain
+donor_models:
+  sex_age: [sex, age]
+  sex_age_apoe4: [sex, age, apoe4]
+  pathology: [braak, cerad]
+  dementia_pathology: [disease, braak, cerad]
+  all: [sex, age, apoe4, disease, braak, cerad]
 
 # Genes missing from either dataset are left out of a set (logged)
 gene_sets:

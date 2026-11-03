@@ -184,7 +184,23 @@ balanced accuracy of a classifier fitted on one dataset and scored on the
 other (`transfer_accuracy`: standardized on the training data;
 `transfer_accuracy_rescaled`: each dataset standardized on its own). With the
 same donors in both datasets, transfer is scored on donors left out of the
-fit. Nulls shuffle the disease label between donors.
+fit. Nulls shuffle the disease label between donors. `disease_covariates.tsv`
+gives, per dataset, the association of each covariate with the disease
+(Cramér's V or η²) and the accuracy of predicting the disease from covariates
+alone (a shortcut a model could take).
+
+`donor_models` (named covariate lists; `disease` is the disease label) adds
+`donor_effect.tsv`: how much of the variation between donors each covariate,
+the disease and each model explains. With one dataset: at cell level, the
+share of the PC variance within a cell type (`pc_share`) and that share
+relative to donor's (`pc_share_of_donor`); at donor level, each donor's cells
+are split in two random halves, whose shared variance is the reproducible
+donor effect (`split_half_reliability`: the share of the between-donor
+pseudobulk variance that is not cell sampling noise), and
+`reproducible_share` is the part of it the covariates explain. With matched
+donors, the same between the two datasets (`cross_dataset_reliability`). Nulls
+shuffle the covariates between donors. Numeric covariates take a `recode` map
+too (e.g. `Braak IV` → 4).
 
 ### `pipeline mathys2023-for-adprs`
 ```bash

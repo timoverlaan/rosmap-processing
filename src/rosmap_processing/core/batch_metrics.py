@@ -6,6 +6,7 @@ those cells first).
 
 Cell level (an embedding, e.g. PCs of log-normalized expression):
     pc_regression     share of the embedding's variance explained by a label
+                      (pc_regression_design: by several variables at once)
     mixing_ratio      local label diversity among kNN neighbours (LISI-style)
     knn_chi2_rejection  share of neighbourhoods whose label mix differs from
                       the overall one (kBET-style)
@@ -23,6 +24,9 @@ Donor level (pseudobulk, one row per donor or donor x dataset):
     association       per-gene t statistics of a term (share at FDR < 0.05, mean t²)
     transfer_accuracy  a classifier fitted on one dataset, scored on another
     paired_decomposition  dataset vs donor variance for donors in two datasets
+    shared_reliability / shared_variance_explained  the donor variance two
+                      measurements of the same donors share, and the share of
+                      it that donor covariates explain
 """
 
 from typing import Dict, Optional, Sequence, Tuple
@@ -73,6 +77,17 @@ def pc_regression(pcs: np.ndarray, labels, numeric: bool = False) -> float:
     PC weighted by that PC's variance (scIB's principal component regression)."""
     weights = np.asarray(pcs, dtype=np.float64).var(axis=0)
     r2 = r2_per_column(pcs, labels, numeric=numeric)
+    return float((weights * r2).sum() / weights.sum()) if weights.sum() > 0 else float("nan")
+
+
+def pc_regression_design(pcs: np.ndarray, X: np.ndarray) -> float:
+    """pc_regression for several variables at once: the R² of each PC in a
+    least-squares fit on the design matrix X (with an intercept), weighted by
+    that PC's variance."""
+    pcs = np.asarray(pcs, dtype=np.float64)
+    weights = pcs.var(axis=0)
+    total = ((pcs - pcs.mean(axis=0)) ** 2).sum(axis=0)
+    r2 = np.divide(total - _rss(X, pcs), total, out=np.zeros_like(total), where=total > 0)
     return float((weights * r2).sum() / weights.sum()) if weights.sum() > 0 else float("nan")
 
 
@@ -397,6 +412,39 @@ def paired_decomposition(A: np.ndarray, B: np.ndarray) -> Dict[str, float]:
         "share_residual": float(np.median(var_residual[ok] / var_total[ok])),
         "donor_correlation": float(np.nanmedian(corr)),
     }
+
+
+def shared_reliability(A: np.ndarray, B: np.ndarray, spearman_brown: bool = False) -> float:
+    """For the same donors (rows) measured twice, e.g. two random halves of
+    their cells or two datasets: the share of the between-donor variance that
+    the two measurements share (covariance over mean variance, summed over
+    genes). With spearman_brown, for the mean of the two (the pseudobulk of
+    both halves)."""
+    a = np.asarray(A, dtype=np.float64) - np.asarray(A, dtype=np.float64).mean(axis=0)
+    b = np.asarray(B, dtype=np.float64) - np.asarray(B, dtype=np.float64).mean(axis=0)
+    variance = ((a ** 2).sum() + (b ** 2).sum()) / 2
+    if variance <= 0:
+        return float("nan")
+    rho = (a * b).sum() / variance
+    return float(2 * rho / (1 + rho)) if spearman_brown else float(rho)
+
+
+def shared_variance_explained(A: np.ndarray, B: np.ndarray, X: np.ndarray) -> float:
+    """Share of the between-donor covariance of A and B (the same donors
+    measured twice; summed over genes) that the donor covariates in X (with
+    an intercept) explain: 1 - the covariance left after regressing X out of
+    both over the covariance, each per degree of freedom. Noise the two
+    measurements do not share drops out, so this is the share of the
+    reproducible donor effect, unlike an R², whose total includes the noise."""
+    A, B = np.asarray(A, dtype=np.float64), np.asarray(B, dtype=np.float64)
+    n = A.shape[0]
+    shared = ((A - A.mean(axis=0)) * (B - B.mean(axis=0))).sum() / (n - 1)
+    if shared <= 0:
+        return float("nan")
+    beta, *_ = np.linalg.lstsq(X, np.hstack([A, B]), rcond=None)
+    fitted = X @ beta
+    left = ((A - fitted[:, :A.shape[1]]) * (B - fitted[:, A.shape[1]:])).sum()
+    return float(1 - left / max(n - np.linalg.matrix_rank(X), 1) / shared)
 
 
 def null_summary(values: Sequence[float]) -> Tuple[float, float]:

@@ -29,11 +29,27 @@ datasets:
       dementia: {column: Cognitive Status, recode: {"Dementia": "yes", "No dementia": "no"}}
       sex: {column: Sex}
       age: {column: Age at Death, numeric: true}
-      adnc: {column: Overall AD neuropathological Change}
-      braak: {column: Braak}
+      # Pathology as ordered stages (Reference donors, not staged, count as
+      # missing); CERAD 0 none - 3 frequent; APOE as the number of e4 alleles
+      adnc: {column: Overall AD neuropathological Change, numeric: true,
+             recode: {"Not AD": 0, "Low": 1, "Intermediate": 2, "High": 3}}
+      braak: {column: Braak, numeric: true, recode: {"Braak 0": 0, "Braak I": 1, "Braak II": 2, "Braak III": 3,
+                                                     "Braak IV": 4, "Braak V": 5, "Braak VI": 6}}
+      thal: {column: Thal, numeric: true, recode: {"Thal 0": 0, "Thal 1": 1, "Thal 2": 2, "Thal 3": 3,
+                                                   "Thal 4": 4, "Thal 5": 5}}
+      cerad: {column: CERAD score, numeric: true, recode: {"Absent": 0, "Sparse": 1, "Moderate": 2, "Frequent": 3}}
+      apoe4: {column: APOE Genotype, numeric: true,
+              recode: {"2/2": 0, "2/3": 0, "3/3": 0, "2/4": 1, "3/4": 1, "4/4": 2}}
     # Disease signal (disease.tsv)
     disease: {column: Cognitive Status, recode: {"Dementia": "yes", "No dementia": "no"}}
 disease_adjust: [sex, age]
+# Donor effect (donor_effect.tsv), as in rosmap_mit.yaml
+donor_models:
+  sex_age: [sex, age]
+  sex_age_apoe4: [sex, age, apoe4]
+  pathology: [braak, cerad]
+  dementia_pathology: [disease, braak, cerad]
+  all: [sex, age, apoe4, disease, braak, cerad]
 
 gene_sets:
   seurat_v3_donor_1000: data/v2/processed/seaad_hvg1000_k30.h5ad

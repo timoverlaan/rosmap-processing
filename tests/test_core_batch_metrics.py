@@ -36,6 +36,12 @@ def test_pc_regression_separated_vs_random(rng):
     assert bm.pc_regression(X, rng.permutation(labels)) < 0.05
 
 
+def test_pc_regression_design_matches_a_label(rng):
+    X, labels = _clusters(rng, shift=3)
+    D, _ = bm.design_matrix(pd.DataFrame({"g": labels}))
+    assert np.isclose(bm.pc_regression_design(X, D), bm.pc_regression(X, labels))
+
+
 def test_permute_labels_between_keeps_donor_level_structure(rng):
     donors = np.repeat([f"d{i}" for i in range(10)], 30)
     batch = np.repeat(["b1"] * 4 + ["b2"] * 6, 30)
@@ -161,3 +167,21 @@ def test_paired_decomposition(rng):
     out = bm.paired_decomposition(rng.normal(size=(n, g)), rng.normal(size=(n, g)))
     assert out["share_donor"] < 0.1
     assert abs(out["donor_correlation"]) < 0.1
+
+
+def test_shared_variance_explained(rng):
+    # Donor effect: variance 2 per gene, half of it from covariate x; each
+    # measurement adds noise of variance 4
+    n, g = 400, 40
+    x = rng.normal(size=n)
+    donor = np.outer(x, rng.normal(size=g)) + rng.normal(size=(n, g))
+    A = donor + rng.normal(scale=2, size=(n, g))
+    B = donor + rng.normal(scale=2, size=(n, g))
+    X = np.column_stack([np.ones(n), x])
+    assert 0.4 < bm.shared_variance_explained(A, B, X) < 0.6
+    assert abs(bm.shared_variance_explained(A, B, X[rng.permutation(n)])) < 0.05
+    # An R² on one measurement counts the noise as unexplained
+    r2 = 1 - bm._rss(X, A).sum() / ((A - A.mean(axis=0)) ** 2).sum()
+    assert r2 < 0.25
+    assert 0.25 < bm.shared_reliability(A, B) < 0.42                    # 2 / 6
+    assert 0.4 < bm.shared_reliability(A, B, spearman_brown=True) < 0.6  # of the mean of the two

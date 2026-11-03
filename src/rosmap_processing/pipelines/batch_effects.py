@@ -24,6 +24,15 @@ cell-level metrics use a balanced part of the sample (balance_datasets): within
 each cell type the same number of cells from every dataset, and from each of
 their donors, so the larger dataset does not dominate the neighbourhoods.
 
+With `donor_models` (named lists of covariates; `disease` is the disease
+label), the donor effect: how much of the variation between donors each
+covariate alone, the disease, and each model explains. With one dataset, at
+cell level (the share of the PC variance within each cell type, also as a
+share of donor's), and at donor level on two random halves of each donor's
+cells, whose shared variance is the reproducible part of the donor effect
+(cell sampling noise drops out). With matched donors, at donor level between
+the datasets: the part of the donor effect both reproduce.
+
 A batch that holds whole donors also carries their differences, so every
 batch, dataset and covariate metric comes with a null (`null_type`): the same
 label shuffled between donors. A label that splits donors is shuffled within
@@ -47,6 +56,10 @@ donors (in any dataset) are left out.
                        accuracy within each dataset, and between datasets
                        the correlation of the disease effects and the
                        accuracy of a classifier fitted on the other dataset
+    disease_covariates.tsv  per dataset, how each covariate goes with the
+                       disease, and the accuracy of predicting the disease
+                       from the covariates alone
+    donor_effect.tsv   with donor_models: the donor effect (above)
     summary.tsv        the rows of the metric tables for all cells / the
                        mean over cell types
     provenance.json    the spec, gene set sizes and code version
@@ -102,6 +115,7 @@ DEFAULTS: Dict[str, Any] = {
     "match_donors": False,
     "balance_datasets": True,
     "disease_adjust": [],
+    "donor_models": {},
     "chunk_size": 50000,
 }
 REQUIRED = ("output_dir", "datasets", "gene_sets")
@@ -142,6 +156,16 @@ def load_spec(path: Union[str, Path]) -> Dict[str, Any]:
         missing = set(spec["disease_adjust"]) - set(cfg["covariates"])
         if missing:
             raise ValueError(f"disease_adjust names covariates that dataset {name} lacks: {sorted(missing)}")
+    for model, keys in spec["donor_models"].items():
+        if not keys:
+            raise ValueError(f"donor_models: model {model} names no covariates")
+        for name, cfg in spec["datasets"].items():
+            if model in cfg["covariates"] or model in ("disease", "donor"):
+                raise ValueError(f"donor_models: model {model} has the name of a label")
+            missing = set(keys) - set(cfg["covariates"]) - ({"disease"} if cfg.get("disease") else set())
+            if missing:
+                raise ValueError(f"donor_models: model {model} names covariates that dataset {name} "
+                                 f"lacks: {sorted(missing)}")
     if len(spec["datasets"]) > 1 and any(cfg["batch"] for cfg in spec["datasets"].values()):
         logger.warning("Batch columns are only analysed with a single dataset; ignoring them")
     return spec
@@ -180,9 +204,10 @@ def _as_labels(values, recode: Optional[Dict] = None) -> np.ndarray:
     return table[codes]
 
 
-def _as_numeric(values) -> np.ndarray:
-    """Numbers from obs values; '90+' -> 90 (the ROSMAP age cap)."""
-    text = pd.Series(_as_labels(values), dtype=object)
+def _as_numeric(values, recode: Optional[Dict] = None) -> np.ndarray:
+    """Numbers from obs values, optionally recoded first (e.g. 'Braak IV' -> 4);
+    '90+' -> 90 (the ROSMAP age cap)."""
+    text = pd.Series(_as_labels(values, recode), dtype=object)
     return pd.to_numeric(text.str.replace("+", "", regex=False), errors="coerce").to_numpy(np.float64)
 
 
@@ -222,6 +247,7 @@ class Dataset:
     totals: Optional[np.ndarray] = None      # sample, over all genes
     groups: Optional[pd.DataFrame] = None    # donor x cell type
     pseudobulk: Optional[np.ndarray] = None  # groups x union
+    pseudobulk_half: Optional[np.ndarray] = None  # the same over a random half of the cells
 
 
 def _matrix_node(f: h5py.File, layer: Optional[str]):
@@ -283,7 +309,7 @@ def prepare_dataset(name: str, cfg: Dict[str, Any], spec: Dict[str, Any]) -> Dat
     for col in cfg["batch"]:
         cells[f"batch:{col}"] = _as_labels(raw[col])[rows]
     for key, cov in covariates.items():
-        values = _as_numeric(raw[cov["column"]]) if cov.get("numeric") else \
+        values = _as_numeric(raw[cov["column"]], cov.get("recode")) if cov.get("numeric") else \
             _as_labels(raw[cov["column"]], cov.get("recode"))
         cells[key] = values[rows]
     if cfg.get("disease"):
@@ -367,9 +393,10 @@ def balance_datasets(cells: pd.DataFrame, celltypes: List[str], matched: bool, m
     return np.sort(np.concatenate(keep)) if keep else np.array([], dtype=int)
 
 
-def stream_counts(ds: Dataset, chunk_size: int) -> None:
+def stream_counts(ds: Dataset, chunk_size: int, halves_rng: Optional[np.random.Generator] = None) -> None:
     """One pass over the matrix: sampled cells' counts for ds.union, their totals
-    over all genes, and pseudobulk sums per donor x cell type."""
+    over all genes, and pseudobulk sums per donor x cell type (with halves_rng,
+    also over a random half of each group's cells)."""
     kept = ds.cells["row"].to_numpy()
     sampled = ds.sample["row"].to_numpy()
     group_codes, groups = pd.MultiIndex.from_arrays(
@@ -377,6 +404,9 @@ def stream_counts(ds: Dataset, chunk_size: int) -> None:
     n_groups = len(groups)
     pseudobulk = np.zeros((n_groups, len(ds.union)))
     library = np.zeros(n_groups)
+    half = halves_rng.random(len(kept)) < 0.5 if halves_rng is not None else None
+    pseudobulk_half = np.zeros_like(pseudobulk) if half is not None else None
+    library_half = np.zeros(n_groups)
     totals = np.zeros(len(sampled))
     parts = []
     start_time = time.time()
@@ -397,6 +427,11 @@ def stream_counts(ds: Dataset, chunk_size: int) -> None:
             indicator = bm._indicator(group_codes[lo:hi], n_groups)
             pseudobulk += (indicator @ genes).toarray()
             library += indicator @ block_totals
+            if half is not None:
+                in_half = np.flatnonzero(half[lo:hi])
+                indicator = bm._indicator(group_codes[lo:hi][in_half], n_groups)
+                pseudobulk_half += (indicator @ genes[in_half]).toarray()
+                library_half += indicator @ block_totals[in_half]
             s_lo, s_hi = np.searchsorted(sampled, [start, stop])
             if s_hi > s_lo:
                 local = np.searchsorted(kept[lo:hi], sampled[s_lo:s_hi])
@@ -411,6 +446,10 @@ def stream_counts(ds: Dataset, chunk_size: int) -> None:
         "donor": groups.get_level_values(0), "celltype": groups.get_level_values(1),
         "n_cells": np.bincount(group_codes, minlength=n_groups), "library_size": library,
     })
+    if half is not None:
+        ds.pseudobulk_half = pseudobulk_half
+        ds.groups["n_half"] = np.bincount(group_codes[half], minlength=n_groups)
+        ds.groups["library_half"] = library_half
 
 
 # ---------------------------------------------------------------- gene sets
@@ -514,12 +553,16 @@ def _null(metric, labels, donors, label: Label, spec, rng):
 
 
 def cell_metrics(gs: str, X: np.ndarray, cells: pd.DataFrame, labels: Dict[str, Label],
-                 celltypes: List[str], spec, rng) -> List[Dict[str, Any]]:
+                 celltypes: List[str], spec, rng,
+                 keep_pcs: Optional[Dict[str, np.ndarray]] = None) -> List[Dict[str, Any]]:
+    """keep_pcs, if given, receives the PCs of each cell type."""
     rows: List[Dict[str, Any]] = []
     scopes = [("all", np.arange(len(cells)))] + \
         [(t, np.flatnonzero(cells["celltype"].to_numpy() == t)) for t in celltypes]
     for scope, idx in scopes:
         pcs = _pca(X[idx], spec["n_pcs"], spec["seed"])
+        if keep_pcs is not None and scope != "all":
+            keep_pcs[scope] = pcs
         sub = cells.iloc[idx]
         donors = sub["donor"].to_numpy()
         base = dict(gene_set=gs, celltype=scope, n_cells=len(idx), n_donors=len(set(donors)))
@@ -729,6 +772,140 @@ def disease_metrics(gs: str, table: pd.DataFrame, Y: np.ndarray, adjust: Dict[st
     return rows
 
 
+def _effect_design(covs: pd.DataFrame, keys: List[str], numeric: List[str]):
+    """Donors (rows of covs) with every covariate in keys, and their design
+    matrix (None if the covariates do not vary)."""
+    ok = covs[keys].notna().all(axis=1).to_numpy()
+    D, _ = bm.design_matrix(covs.loc[ok, keys], [k for k in keys if k in numeric])
+    return ok, (D if D.shape[1] > 1 else None)
+
+
+def donor_effect_cells(gs: str, pcs_by_type: Dict[str, np.ndarray], cells: pd.DataFrame,
+                       covs: pd.DataFrame, terms: Dict[str, List[str]], numeric: List[str],
+                       spec, rng) -> List[Dict[str, Any]]:
+    """Cell level, per cell type: the share of the PC variance that donor
+    explains, and per term the share its covariates explain (pc_share), also
+    as a share of the donor's (pc_share_of_donor; donor-level covariates
+    cannot explain more than donor). covs: one row per donor, indexed by
+    donor. Nulls shuffle the covariates between donors."""
+    rows: List[Dict[str, Any]] = []
+    celltype = cells["celltype"].to_numpy()
+    for t, pcs in pcs_by_type.items():
+        donors = cells["donor"].to_numpy()[celltype == t]
+        base = dict(gene_set=gs, celltype=t)
+        rows.append(_row(**base, label="donor", metric="pc_share", value=bm.pc_regression(pcs, donors),
+                         n_donors=len(set(donors)), n_cells=len(donors)))
+        sub = covs.loc[sorted(set(donors))]
+        for name, keys in terms.items():
+            ok, D = _effect_design(sub, keys, numeric)
+            if D is None or ok.sum() < spec["min_donors"]:
+                continue
+            kept = sub.index[ok]
+            mask = np.isin(donors, kept)
+            pos = pd.Index(kept).get_indexer(donors[mask])
+            p = pcs[mask]
+            donor_share = bm.pc_regression(p, donors[mask])
+            value = bm.pc_regression_design(p, D[pos])
+            nulls = [bm.pc_regression_design(p, D[rng.permutation(len(D))][pos])
+                     for _ in range(spec["n_permutations"])]
+            null_mean, null_sd = bm.null_summary(nulls)
+            extra = dict(null_type="between", n_donors=int(ok.sum()), n_cells=int(mask.sum()),
+                         covariates="+".join(keys))
+            rows.append(_row(**base, label=name, metric="pc_share", value=value, null_mean=null_mean,
+                             null_sd=null_sd, **extra))
+            if donor_share > 0:
+                rows.append(_row(**base, label=name, metric="pc_share_of_donor", value=value / donor_share,
+                                 null_mean=null_mean / donor_share, null_sd=null_sd / donor_share, **extra))
+    return rows
+
+
+def donor_effect_shared(gs: str, celltype: str, A: np.ndarray, B: np.ndarray, covs: pd.DataFrame,
+                        terms: Dict[str, List[str]], numeric: List[str], metric: str,
+                        spec, rng) -> List[Dict[str, Any]]:
+    """Donor level, the same donors measured twice (rows of A and B, aligned
+    with covs): two random halves of their cells (metric
+    'split_half_reliability', for the pseudobulk of both halves) or two
+    datasets ('cross_dataset_reliability'). The share of the between-donor
+    variance the two measurements share, and per term the share of that
+    shared variance its covariates explain (reproducible_share). Nulls
+    shuffle the covariates between donors."""
+    base = dict(gene_set=gs, celltype=celltype)
+    reliability = bm.shared_reliability(A, B, spearman_brown=metric == "split_half_reliability")
+    rows = [_row(**base, label="donor", metric=metric, value=reliability, n_donors=len(A))]
+    for name, keys in terms.items():
+        ok, D = _effect_design(covs, keys, numeric)
+        if D is None or ok.sum() < spec["min_donors"]:
+            continue
+        a, b = A[ok], B[ok]
+        value = bm.shared_variance_explained(a, b, D)
+        nulls = [bm.shared_variance_explained(a, b, D[rng.permutation(len(D))])
+                 for _ in range(spec["n_permutations"])]
+        null_mean, null_sd = bm.null_summary(nulls)
+        rows.append(_row(**base, label=name, metric="reproducible_share", value=value, null_mean=null_mean,
+                         null_sd=null_sd, null_type="between", n_donors=int(ok.sum()),
+                         covariates="+".join(keys)))
+    return rows
+
+
+def _halves(ds: Dataset, columns: np.ndarray, celltype: str, min_cells: int):
+    """log-CPM of the two random halves of each donor's cells of one cell type
+    (both with >= min_cells cells), and the donors."""
+    g = ds.groups
+    other = (g["n_cells"] - g["n_half"]).to_numpy()
+    sel = ((g["celltype"] == celltype) & (g["n_half"] >= min_cells)).to_numpy() & (other >= min_cells)
+    half, full = ds.pseudobulk_half[sel][:, columns], ds.pseudobulk[sel][:, columns]
+    library_half = g.loc[sel, "library_half"].to_numpy()
+    A = _log_cpm(half, library_half)
+    B = _log_cpm(full - half, g.loc[sel, "library_size"].to_numpy() - library_half)
+    return A, B, g.loc[sel, "donor"].to_numpy()
+
+
+DISEASE_COVARIATE_COLUMNS = ["dataset", "term", "covariates", "metric", "value", "p_value", "null_mean",
+                             "excess", "n_donors"]
+
+
+def disease_covariates(donors: pd.DataFrame, covariates: Dict[str, Label], derived: set,
+                       terms: Dict[str, List[str]], numeric: List[str], rng) -> pd.DataFrame:
+    """Per dataset, at donor level: how each covariate goes with the disease
+    label (Cramér's V, or eta² for a numeric one, with p-values), and the
+    cross-validated balanced accuracy of predicting the disease from the
+    covariates of each term alone: what a model could get from them as a
+    shortcut. Covariates read from the disease column itself (`derived`) are
+    left out."""
+    rows = []
+    for name, part in donors.groupby("dataset", sort=False):
+        part = part[part["disease"].notna()]
+        if part["disease"].nunique() < 2:
+            continue
+        for key, label in covariates.items():
+            pair = part[["disease", key]].dropna()
+            if key in derived or pair[key].nunique() < 2 or len(pair) < 3:
+                continue
+            if label.numeric:
+                value, p = bm.eta_squared(pair[key].to_numpy(np.float64), pair["disease"].to_numpy())
+            else:
+                value, p = bm.cramers_v(pair["disease"].to_numpy(), pair[key].to_numpy())
+            rows.append(dict(dataset=name, term=key, covariates=key,
+                             metric="eta_squared" if label.numeric else "cramers_v",
+                             value=value, p_value=p, n_donors=len(pair)))
+        seen = set()
+        for term, keys in terms.items():
+            keys = [k for k in keys if k != "disease" and k not in derived]
+            sub = part[["disease"] + keys].dropna()
+            if not keys or tuple(keys) in seen or len(sub) < 10:
+                continue
+            seen.add(tuple(keys))
+            X, _ = bm.design_matrix(sub[keys], [k for k in keys if k in numeric])
+            if X.shape[1] < 2:
+                continue
+            accuracy, chance, _ = bm.classify(X[:, 1:], sub["disease"].to_numpy(), rng)
+            if np.isfinite(accuracy):
+                rows.append(dict(dataset=name, term=term, covariates="+".join(keys),
+                                 metric="balanced_accuracy", value=accuracy, null_mean=chance,
+                                 excess=accuracy - chance, n_donors=len(sub)))
+    return pd.DataFrame(rows, columns=DISEASE_COVARIATE_COLUMNS)
+
+
 def _mean_rows(rows: List[Dict[str, Any]], weight: str) -> List[Dict[str, Any]]:
     """Per gene set, label and metric: the mean over cell types, weighted by `weight`."""
     df = pd.DataFrame([r for r in rows if r["celltype"] != "all"])
@@ -823,7 +1000,15 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
 
     datasets = [prepare_dataset(name, cfg, spec) for name, cfg in spec["datasets"].items()]
     single = len(datasets) == 1
-    if spec["match_donors"] and not single:
+    matched = spec["match_donors"] and not single
+    # The donor effect needs each donor measured twice: two random halves of
+    # its cells (one dataset) or two datasets (matched donors). Own stream, so
+    # the other tables do not depend on it.
+    effect = bool(spec["donor_models"]) and (single or matched)
+    effect_rng = np.random.default_rng([spec["seed"], 2])
+    if spec["donor_models"] and not effect:
+        logger.warning("donor_models needs one dataset or matched donors; skipping the donor effect")
+    if matched:
         match_donors(datasets)
     elif not single:
         for ds in datasets:
@@ -835,7 +1020,7 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
         raise ValueError("No usable gene sets")
     for ds in datasets:
         logger.info(f"[{ds.name}] streaming counts for {len(ds.union)} genes")
-        stream_counts(ds, spec["chunk_size"])
+        stream_counts(ds, spec["chunk_size"], effect_rng if effect and single else None)
 
     # Labels: batch columns (one dataset) or the dataset (several), covariates
     # present in every dataset, donor and cell type.
@@ -871,10 +1056,20 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
         if len(levels) != 2:
             raise ValueError(f"The disease label needs exactly 2 values across the datasets, not {len(levels)}")
     adjust = {k: covariates[k] for k in spec["disease_adjust"]}
+    # Donor effect and disease covariates: every covariate alone (except those
+    # read from the disease column, which the disease label stands for), the
+    # disease, and the spec's joint models
+    derived = {k for k in covariate_names for ds in datasets
+               if ds.cfg.get("disease") and ds.cfg["covariates"][k]["column"] == ds.cfg["disease"]["column"]}
+    effect_terms = {k: [k] for k in covariate_names if k not in derived}
+    if has_disease:
+        effect_terms["disease"] = ["disease"]
+    effect_terms.update(spec["donor_models"])
+    numeric = [k for k, c in covariates.items() if c.numeric]
+    disease_cov_rng = np.random.default_rng([spec["seed"], 3])
 
     celltypes = _celltypes_to_analyse(datasets, spec["min_donors"])
     logger.info(f"Cell types with >= {spec['min_donors']} donors in every dataset: {celltypes}")
-    matched = spec["match_donors"] and not single
     # Several datasets: the cell-level metrics use a sample with equal cells
     # per dataset (and per donor) within each cell type.
     cell_idx = balance_datasets(sample, celltypes, matched, spec["min_donors"], rng) \
@@ -892,10 +1087,16 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
     confounding = pd.DataFrame(columns=CONFOUNDING_COLUMNS) if matched else \
         _confounding(donors, groupers, covariates)
     confounding.to_csv(out / "confounding.tsv", sep="\t", index=False, float_format="%.4g")
+    if has_disease:
+        disease_covariates(donors, covariates, derived, effect_terms, numeric, disease_cov_rng).to_csv(
+            out / "disease_covariates.tsv", sep="\t", index=False, float_format="%.4g")
+    # Covariates per donor (with matched donors, as the first dataset has them)
+    covs = donors.drop_duplicates("donor").set_index("donor")
 
     cell_rows: List[Dict[str, Any]] = []
     donor_rows: List[Dict[str, Any]] = []
     disease_rows: List[Dict[str, Any]] = []
+    effect_rows: List[Dict[str, Any]] = []
     for gs, positions in gene_sets.items():
         t0 = time.time()
         n_genes = len(next(iter(positions.values())))
@@ -905,9 +1106,14 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
         ])
         if cell_idx is not None:
             X = X[cell_idx]
-        rows = cell_metrics(gs, X, cell_sample, labels, cell_celltypes, spec, rng)
+        pcs_by_type = {} if effect and single else None
+        rows = cell_metrics(gs, X, cell_sample, labels, cell_celltypes, spec, rng, keep_pcs=pcs_by_type)
         cell_rows += [{**r, "n_genes": n_genes} for r in rows]
         del X
+        if pcs_by_type:
+            rows = donor_effect_cells(gs, pcs_by_type, cell_sample, covs, effect_terms, numeric, spec,
+                                      effect_rng)
+            effect_rows += [{**r, "n_genes": n_genes} for r in rows]
 
         pb = pd.concat([ds.groups.assign(dataset=ds.name) for ds in datasets], ignore_index=True)
         Y_all = np.vstack([_log_cpm(ds.pseudobulk[:, positions[ds.name]], ds.groups["library_size"].to_numpy())
@@ -929,6 +1135,22 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
             if has_disease:
                 rows = disease_metrics(gs, table, Y, adjust, t, spec, disease_rng)
                 disease_rows += [{**r, "n_genes": n_genes} for r in rows]
+            if effect:
+                if single:
+                    A, B, ids = _halves(datasets[0], positions[datasets[0].name], t,
+                                        spec["min_cells_per_pseudobulk"])
+                    metric = "split_half_reliability"
+                else:  # the donors in both of the first two datasets
+                    row_of = {name: pd.Series(part.index, index=part["donor"])
+                              for name, part in table.groupby("dataset", sort=False)}
+                    row_a, row_b = (row_of.get(ds.name, pd.Series(dtype=int)) for ds in datasets[:2])
+                    ids = np.array(sorted(set(row_a.index) & set(row_b.index)), dtype=object)
+                    A, B = Y[row_a[ids].to_numpy()], Y[row_b[ids].to_numpy()]
+                    metric = "cross_dataset_reliability"
+                if len(ids) >= spec["min_donors"]:
+                    rows = donor_effect_shared(gs, t, A, B, covs.loc[ids], effect_terms, numeric, metric,
+                                               spec, effect_rng)
+                    effect_rows += [{**r, "n_genes": n_genes} for r in rows]
         logger.info(f"Gene set {gs} ({n_genes} genes) done in {time.time() - t0:.0f} s")
 
     cell_rows += _mean_rows(cell_rows, "n_cells")
@@ -940,10 +1162,15 @@ def run_batch_effects(spec_path: Union[str, Path], overwrite: bool = False) -> P
     disease_df = pd.DataFrame(disease_rows)
     if has_disease:
         disease_df.to_csv(out / "disease.tsv", sep="\t", index=False, float_format="%.4g")
+    effect_rows += _mean_rows(effect_rows, "n_donors")
+    effect_df = pd.DataFrame(effect_rows)
+    if effect:
+        effect_df.to_csv(out / "donor_effect.tsv", sep="\t", index=False, float_format="%.4g")
     summary = pd.concat([
         cell_df[cell_df["celltype"].isin(["all", "mean"])].assign(level="cells"),
         donor_df[donor_df["celltype"] == "mean"].assign(level="donors") if len(donor_df) else None,
         disease_df[disease_df["celltype"] == "mean"].assign(level="disease") if len(disease_df) else None,
+        effect_df[effect_df["celltype"] == "mean"].assign(level="donor_effect") if len(effect_df) else None,
     ], ignore_index=True)
     columns = ["gene_set", "level", "celltype", "label", "metric", "value", "null_mean", "excess"]
     summary[[c for c in columns if c in summary.columns]].to_csv(

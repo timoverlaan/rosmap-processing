@@ -139,6 +139,43 @@ def test_within_dataset_finds_the_batch_effect(tmp_path):
         run_batch_effects(spec)
 
 
+MODELS = {"sex_age": ["sex", "age"], "all": ["sex", "age", "pmi", "disease"]}
+
+
+def test_donor_effect_and_disease_covariates(tmp_path):
+    rng = np.random.default_rng(6)
+    donors = [f"R{800 + i}" for i in range(16)]
+    names = _counts(tmp_path / "counts.h5ad", rng, donors, {d: "B1" for d in donors}, disease_effect=True)
+    _gene_files(tmp_path, list(names))
+    spec = _write_spec(tmp_path, "effect", {"one": {
+        "counts": str(tmp_path / "counts.h5ad"), "donor": "projid", "celltype": CELLTYPES,
+        "covariates": COVARIATES, "disease": DISEASE,
+    }}, {"with disease genes": str(tmp_path / "without_batch_genes.txt"),
+         "without disease genes": str(tmp_path / "with_batch_genes.txt")},
+        donor_models=MODELS, n_permutations=8)
+
+    out = run_batch_effects(spec)
+    e = pd.read_csv(out / "donor_effect.tsv", sep="\t")
+    exc = e[e["celltype"] == "Exc"].set_index(["gene_set", "label", "metric"])
+    # The disease genes make the disease a large part of the reproducible donor effect
+    assert exc.loc[("with disease genes", "disease", "reproducible_share"), "excess"] > 0.2
+    assert exc.loc[("without disease genes", "disease", "reproducible_share"), "excess"] < 0.15
+    assert exc.loc[("with disease genes", "all", "pc_share"), "excess"] > 0
+    share = e.loc[e["metric"] == "pc_share_of_donor", "value"]
+    assert ((share >= 0) & (share <= 1 + 1e-9)).all()
+    reliability = e.loc[e["metric"] == "split_half_reliability", "value"]
+    assert ((reliability > 0) & (reliability < 1)).all()
+    assert "diagnosis" not in set(e["label"])  # read from the disease column
+    assert {"donor_effect"} <= set(pd.read_csv(out / "summary.tsv", sep="\t")["level"])
+
+    c = pd.read_csv(out / "disease_covariates.tsv", sep="\t").set_index(["term", "metric"])
+    assert c.loc[("sex", "cramers_v"), "n_donors"] == 16
+    assert ("age", "eta_squared") in c.index and ("pmi", "eta_squared") in c.index
+    assert ("sex_age", "balanced_accuracy") in c.index
+    assert "diagnosis" not in c.index.get_level_values("term")
+    assert not any(donor in _all_output_text(out) for donor in donors)
+
+
 def test_matched_donors_across_datasets(tmp_path):
     rng = np.random.default_rng(1)
     donors = [f"R{200 + i}" for i in range(8)]
@@ -152,7 +189,7 @@ def test_matched_donors_across_datasets(tmp_path):
                          "donor": "projid", "match_on": "individualID", "celltype": CELLTYPES,
                          "covariates": COVARIATES, "disease": DISEASE}
     spec = _write_spec(tmp_path, "matched", {"a": dataset("a.h5ad"), "b": dataset("b.h5ad")},
-                       {"ensembl": str(tmp_path / "ensembl.txt")}, match_donors=True)
+                       {"ensembl": str(tmp_path / "ensembl.txt")}, match_donors=True, donor_models=MODELS)
 
     out = run_batch_effects(spec)
     cells = pd.read_csv(out / "cells.tsv", sep="\t").set_index(["dataset", "celltype"])
@@ -169,6 +206,11 @@ def test_matched_donors_across_datasets(tmp_path):
     # The same donors in both: transfer is scored on donors left out of the fit
     dis = pd.read_csv(out / "disease.tsv", sep="\t").set_index(["celltype", "label", "metric"])
     assert ("Exc", "a -> b", "transfer_accuracy_rescaled") in dis.index
+    # Donor effect: the donor variation both datasets reproduce
+    e = pd.read_csv(out / "donor_effect.tsv", sep="\t").set_index(["celltype", "label", "metric"])
+    assert 0 < e.loc[("Exc", "donor", "cross_dataset_reliability"), "value"] < 1
+    assert ("Exc", "disease", "reproducible_share") in e.index
+    assert "pc_share" not in set(e.index.get_level_values("metric"))  # cell level: one dataset only
     assert not any(donor in _all_output_text(out) for donor in donors)
 
 
