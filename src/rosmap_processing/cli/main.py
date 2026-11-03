@@ -85,6 +85,21 @@ def main():
     prepare_parser.add_argument("--metadata", type=str, default=None, help="Clinical metadata CSV to merge into obs")
     prepare_parser.add_argument("--overwrite", action="store_true", help="Replace an existing output")
 
+    # data diverse-cohorts
+    dc_parser = data_subparsers.add_parser(
+        "diverse-cohorts",
+        help="DiverseCohorts gene expression class (.h5 from rdata_to_h5.R) -> count h5ad with cell and donor metadata",
+    )
+    dc_parser.add_argument("input", type=str, help=".h5 written by src/convert_R/rdata_to_h5.R from a gex_mat_*.rda")
+    dc_parser.add_argument("--output", type=str, required=True, help="Output h5ad")
+    dc_parser.add_argument("--download-dir", type=str, default="data/v2/download/DiverseCohorts",
+                           help="Directory with the DiverseCohorts cell table and metadata CSVs")
+    dc_parser.add_argument("--clinical", type=str, default=None,
+                           help="ROSMAP clinical CSV, joined on projid (e.g. data/v2/download/ROSMAP/ROSMAP_clinical.csv)")
+    dc_parser.add_argument("--region", type=str, default="dorsolateral prefrontal cortex",
+                           help="Keep the cells of this region ('all' keeps every region)")
+    dc_parser.add_argument("--overwrite", action="store_true", help="Replace an existing output")
+
     # data category-fix
     category_parser = data_subparsers.add_parser(
         "category-fix", help="Fix categorical columns (refuses to drop .raw unless X holds counts)"
@@ -318,6 +333,11 @@ def handle_data_command(args):
         if problems:
             raise ValueError(f"{len(problems)} file(s) in {args.dir} do not match the pinned Synapse versions")
         logger.info(f"All {args.dataset} files in {args.dir} match the pinned Synapse versions")
+
+    elif args.data_command == "diverse-cohorts":
+        from rosmap_processing.data.diverse_cohorts import prepare_file as prepare_dc
+        prepare_dc(args.input, args.output, args.download_dir, clinical=args.clinical,
+                   region=None if args.region == "all" else args.region, overwrite=args.overwrite)
 
     elif args.data_command == "prepare":
         from rosmap_processing.data.prepare import prepare_file

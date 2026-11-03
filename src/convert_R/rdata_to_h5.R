@@ -56,7 +56,7 @@ tmp <- paste0(output, ".partial")
 if (file.exists(tmp)) file.remove(tmp)
 h5 <- H5File$new(tmp, mode = "w")
 write_vector <- function(name, x) {
-  h5$create_dataset(name, robj = x, chunk_dims = min(length(x), 1048576L), gzip_level = 4)
+  h5$create_dataset(name, robj = x, chunk_dims = min(length(x), 1048576L), gzip_level = 1)
 }
 write_vector("data", m@x)
 write_vector("indices", m@i)
