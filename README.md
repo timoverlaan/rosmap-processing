@@ -16,6 +16,8 @@ aggregates for the ad-prs project.
 | `ROSMAP_MIT` | Mathys et al., *Cell* 2023 (MIT) | 2,342,020 / 427 | 33,538 (Cell Ranger GRCh38-3.0.0, Ensembl 93) | [Synapse syn52293417](https://www.synapse.org/#!Synapse:syn52293417) |
 | `ROSMAP` | Green et al., *Nature* 2024 (De Jager / Habib labs) | 1,649,672 / 437 | 18,745–20,326 per cell class (GRCh38-2020-A, filtered per class) | Synapse syn53366818 (see `SYNAPSE_IDS_ROSMAP`) |
 | `SeaAD` | SEA-AD, prefrontal cortex (A9) | 1,395,601 / 83 | 36,601 (GRCh38-2020-A, GENCODE v32) | [AWS open data](https://registry.opendata.aws/allen-sea-ad-atlas/) |
+| `DiverseCohorts` | AMP-AD DiverseCohorts (Rush), 10x multiome gene expression, DLPFC only | 1,812,921 / 412 | 27,984 (GENCODE v32 names; 26,306 mapped) | Synapse, study AMP-AD_DiverseCohorts (see `SYNAPSE_IDS_DIVERSE_COHORTS`) |
+| `PsychAD` | PsychAD (Lee et al. 2024, Mount Sinai), hashed donor pools, DLPFC | 6,320,459 / 1,494 | 34,890 (named by Ensembl ID) | Synapse, study MSSM_PsychAD (see `SYNAPSE_IDS_PSYCHAD`) |
 
 In the Green 2024 objects each cell class keeps only genes detected in at least
 15 of its nuclei ([`subset.cell.type.R`](https://github.com/naomihabiblab/BEYOND_DLPFC/blob/487325e9624e53d34dca516da58767c386677d60/2.%20Cell-type%20analysis/utils/subset.cell.type.R#L57-L69)),
@@ -74,9 +76,9 @@ seurat_v3 HVG fit fails on the smallest ROSMAP-MIT donors.
 Green 2024 and Mathys 2023 are both ROSMAP DLPFC atlases and very likely share
 many participants: do not use one to validate a model trained on the other.
 SeaAD is an independent cohort. DiverseCohorts is all Rush (ROS, MAP, MARS,
-CLINCORE) and PsychAD has 152 Rush donors, so both share participants with
-the ROSMAP atlases too. DiverseCohorts' ROS and MAP donors carry the ROSMAP
-individualID.
+CLINCORE) and PsychAD has 152 Rush donors; their Rush donors carry the ROSMAP
+individualID. DiverseCohorts shares 100 donors with MIT and 109 with Green;
+PsychAD only 6 and 4, and the two share 87 with each other.
 
 ## Running on DAIC
 
@@ -109,6 +111,11 @@ sbatch slurm/batch_effects.sh config/batch_effects/rosmap_green.yaml  # within G
 sbatch slurm/batch_effects.sh config/batch_effects/seaad.yaml         # within SeaAD (library, chemistry)
 sbatch slurm/batch_effects.sh config/batch_effects/mit_vs_seaad.yaml  # dataset effect MIT vs SeaAD
 sbatch slurm/batch_effects.sh config/batch_effects/mit_vs_green.yaml  # MIT vs Green, shared donors
+sbatch slurm/download.sh diverse-cohorts psychad  # pinned DiverseCohorts and PsychAD files (~175 GB)
+sbatch slurm/run_all_diverse_cohorts.sh           # -> data/v2/counts/DiverseCohorts (DLPFC; about 1.5 h)
+sbatch slurm/run_all_psychad.sh                   # -> data/v2/counts/PsychAD (about 1 h)
+sbatch slurm/gene_maps.sh                         # again, for their gene maps
+sbatch slurm/batch_effects.sh config/batch_effects/<spec>.yaml  # diverse_cohorts*, psychad*, mit_vs_*, green_vs_*
 ```
 
 The batch-effect specs name obs columns (batch, cell type, covariates); check

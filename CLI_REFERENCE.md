@@ -247,6 +247,14 @@ spec as the base, so a variant names only what differs: the `*_no_xy.yaml`
 specs rerun the others without the X and Y genes (`genes on-chromosomes`, made
 by `slurm/gene_maps.sh`) into their own output directories.
 
+Specs for the newer datasets: `diverse_cohorts.yaml` and `psychad.yaml`
+(within each), `mit_vs_diverse_cohorts.yaml` and `mit_vs_psychad.yaml` (all
+donors, as `mit_vs_seaad.yaml`), and the shared-donor specs
+`{mit,green}_vs_{diverse_cohorts,psychad}_shared.yaml` and
+`diverse_cohorts_vs_psychad_shared.yaml` (as `mit_vs_green.yaml`, matched on
+individualID). PsychAD shares only 6 donors with MIT and 4 with Green; the
+Green one stops with "The disease label needs exactly 2 values".
+
 ### `pipeline mathys2023-for-adprs`
 ```bash
 python -m rosmap_processing pipeline mathys2023-for-adprs \
