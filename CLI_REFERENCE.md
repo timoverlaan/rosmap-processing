@@ -269,7 +269,8 @@ normalization and PCA as in `pipeline batch-effects`, on one gene set (default
 `seurat_v3_donor_2000`, else `mit_seurat_v3_donor_2000`), except that cells no
 cell-type rule matches are kept as "Other". Donors, and batches or annotations
 with more than 20 levels, get no legend (annotations get text labels instead);
-no panel names a donor. Writes `umap_<gene set>.png`, `umap_<gene set>.parquet`
+no panel names a donor. Numbers with up to 8 values (Braak, CERAD, APOE e4)
+get an ordered legend rather than a colour bar. Writes `umap_<gene set>.png`, `umap_<gene set>.parquet`
 (dataset, row in its count file and coordinates of each sampled cell) and
 `umap_<gene set>.json` (provenance). On DAIC: `sbatch slurm/umap.sh <spec>
 [options]`.
