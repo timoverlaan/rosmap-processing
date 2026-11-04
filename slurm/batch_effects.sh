@@ -19,12 +19,13 @@
 #SBATCH --output=slurm/out/%j_batch_effects.out
 #SBATCH --error=slurm/out/%j_batch_effects.out
 
-SPEC="${1:?usage: sbatch slurm/batch_effects.sh config/batch_effects/<name>.yaml}"
+SPEC="${1:?usage: sbatch slurm/batch_effects.sh config/batch_effects/<name>.yaml [--overwrite]}"
+shift
 THREADS="${SLURM_CPUS_PER_TASK:-8}"
 # Mount config/ (the spec is read in the container) and keep the BLAS threads
 # within the allocation.
 EXTRA_BINDS="--bind config/:/opt/app/config/ --env OMP_NUM_THREADS=$THREADS --env OPENBLAS_NUM_THREADS=$THREADS --env MKL_NUM_THREADS=$THREADS"
 source slurm/common.sh
 
-echo "spec: $SPEC"
-rp pipeline batch-effects "$SPEC"
+echo "spec: $SPEC $*"
+rp pipeline batch-effects "$SPEC" "$@"
