@@ -24,6 +24,7 @@ Outputs (default data/v2/umap/<spec name>/):
 """
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
@@ -54,13 +55,16 @@ DEFAULT_GENE_SETS = ("seurat_v3_donor_2000", "mit_seurat_v3_donor_2000")
 DEFAULT_OUTPUT_ROOT = Path("data/v2/umap")
 OTHER_CELLTYPE = "Other"
 # The categorical palette of the dataviz reference instance, in its fixed order,
-# and its blue ramp for numbers
+# and its blue ramp: from step 200 for numbers (lighter points vanish on white),
+# from step 250 for numbers with few values (ordinal)
 CATEGORICAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
-SEQUENTIAL = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
+SEQUENTIAL = ["#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
+ORDINAL = ["#86b6ef", "#0d366b"]
 OTHER_COLOR, MISSING_COLOR, INK = "#a8a7a0", "#e4e3de", "#2b2b29"
 # Up to MAX_LEGEND levels each get a colour; up to MAX_FOLD, the largest
 # MAX_LEGEND - 1 do and the rest are "Other"; more than that, every level gets a
 # colour without a legend (donors, batches) or a text label (annotations).
+# Numbers with up to MAX_LEGEND values get a legend too, in order.
 MAX_LEGEND = len(CATEGORICAL)
 MAX_FOLD = 20
 MIN_LABEL_SHARE = 0.002   # annotation levels with fewer cells get no text label
@@ -87,11 +91,12 @@ def pick_gene_set(spec: Dict[str, Any], name: Optional[str]) -> str:
 
 
 def _numeric_or_none(values: np.ndarray) -> Optional[np.ndarray]:
-    """Numbers, if nearly all present values are numbers with many levels."""
+    """Numbers, if nearly all present values are numbers with more than
+    MAX_LEGEND levels (fewer are shown as categories, in numeric order)."""
     text = pd.Series(values, dtype=object)
     present = text.notna()
     numbers = pd.to_numeric(text.astype(str).str.replace("+", "", regex=False), errors="coerce")
-    if present.sum() and numbers[present].notna().mean() > 0.95 and numbers.nunique() > MAX_FOLD:
+    if present.sum() and numbers[present].notna().mean() > 0.95 and numbers.nunique() > MAX_LEGEND:
         return numbers.to_numpy(np.float64)
     return None
 
@@ -132,12 +137,20 @@ def build_panels(sample: pd.DataFrame, numeric: Dict[str, bool], batch_columns: 
     return panels
 
 
+def _first_number(text) -> Optional[float]:
+    match = re.search(r"-?\d+(\.\d+)?", str(text))
+    return float(match.group()) if match else None
+
+
 def _level_order(values: pd.Series) -> List[str]:
-    """Levels by number if they all are numbers, else by size."""
+    """Levels in the order of the number in them ("1", "Stage 2", "Phase 3"),
+    if at least half have one, followed by the rest by size; else by size."""
     counts = values.value_counts()
-    numbers = pd.to_numeric(pd.Series(counts.index), errors="coerce")
-    if numbers.notna().all():
-        return [counts.index[i] for i in np.argsort(numbers.to_numpy(), kind="stable")]
+    numbers = {level: _first_number(level) for level in counts.index}
+    numbered = [level for level in counts.index if numbers[level] is not None]
+    if len(numbered) >= len(counts) / 2:
+        rest = [level for level in counts.index if numbers[level] is None]
+        return sorted(numbered, key=lambda level: numbers[level]) + rest
     return list(counts.index)
 
 
@@ -159,6 +172,25 @@ def category_colors(values: np.ndarray):
     if len(kept) < len(levels):
         legend.append((f"Other ({len(levels) - len(kept)})", OTHER_COLOR))
     if s.isna().any():
+        legend.append(("missing", MISSING_COLOR))
+    return per_cell, legend
+
+
+def ordinal_colors(values: np.ndarray):
+    """Per-cell colours and the legend for numbers with few values: the ramp
+    from light to dark, in numeric order."""
+    import matplotlib.colors as mcolors
+
+    v = np.asarray(values, dtype=np.float64)
+    ok = ~np.isnan(v)
+    levels = np.unique(v[ok])
+    ramp = mcolors.LinearSegmentedColormap.from_list("ordinal", ORDINAL)
+    colors = np.array([mcolors.to_hex(ramp(i / max(len(levels) - 1, 1))) for i in range(len(levels))],
+                      dtype=object)
+    per_cell = np.full(len(v), MISSING_COLOR, dtype=object)
+    per_cell[ok] = colors[np.searchsorted(levels, v[ok])]
+    legend = [(f"{x:g}", c) for x, c in zip(levels, colors)]
+    if not ok.all():
         legend.append(("missing", MISSING_COLOR))
     return per_cell, legend
 
@@ -185,9 +217,18 @@ def plot_panels(coords: np.ndarray, panels: List[Panel], path: Path, title: str,
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
 
+    def add_legend(ax, legend):
+        handles = [Line2D([], [], marker="o", linestyle="", markersize=6, markerfacecolor=c,
+                          markeredgewidth=0, label=str(label)) for label, c in legend]
+        longest = max(len(str(label)) for label, _ in legend)
+        ncol = 1 if longest > 28 else 2 if longest > 12 else 3
+        ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.02),
+                  ncol=min(ncol, len(handles)), fontsize=7, frameon=False, handletextpad=0.2,
+                  columnspacing=0.8, labelcolor=INK)
+
     n = len(coords)
     order = np.random.default_rng(seed).permutation(n)
-    size = float(np.clip(3e4 / n, 0.05, 4.0))
+    size = float(np.clip(6e4 / n, 0.15, 4.0))
     ncols = min(4, len(panels))
     nrows = -(-len(panels) // ncols)
     fig, axes = plt.subplots(nrows, ncols, figsize=(4.6 * ncols, 5.4 * nrows), squeeze=False)
@@ -202,8 +243,13 @@ def plot_panels(coords: np.ndarray, panels: List[Panel], path: Path, title: str,
         if panel.kind == "numeric":
             values = panel.values.astype(np.float64)
             ok = ~missing
-            ax.scatter(*coords[draw[missing[draw]]].T, s=size, c=MISSING_COLOR, linewidths=0, rasterized=True)
-            if ok.any():
+            if np.unique(values[ok]).size <= MAX_LEGEND:
+                colors, legend = ordinal_colors(values)
+                ax.scatter(*coords[draw].T, s=size, c=list(colors[draw]), linewidths=0, rasterized=True)
+                add_legend(ax, legend)
+            else:
+                ax.scatter(*coords[draw[missing[draw]]].T, s=size, c=MISSING_COLOR, linewidths=0,
+                           rasterized=True)
                 lo, hi = np.nanpercentile(values[ok], [1, 99])
                 points = ax.scatter(*coords[draw[ok[draw]]].T, s=size, c=values[draw[ok[draw]]], cmap=cmap,
                                     vmin=lo, vmax=hi if hi > lo else lo + 1, linewidths=0, rasterized=True)
@@ -213,10 +259,7 @@ def plot_panels(coords: np.ndarray, panels: List[Panel], path: Path, title: str,
         elif panel.kind == "category":
             colors, legend = category_colors(panel.values)
             ax.scatter(*coords[draw].T, s=size, c=list(colors[draw]), linewidths=0, rasterized=True)
-            handles = [Line2D([], [], marker="o", linestyle="", markersize=6, markerfacecolor=c,
-                              markeredgewidth=0, label=str(label)) for label, c in legend]
-            ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.02), ncol=min(3, len(handles)),
-                      fontsize=7, frameon=False, handletextpad=0.2, columnspacing=0.8, labelcolor=INK)
+            add_legend(ax, legend)
         else:
             colors = identity_colors(panel.values, seed)
             ax.scatter(*coords[draw].T, s=size, c=colors[draw], linewidths=0, rasterized=True)

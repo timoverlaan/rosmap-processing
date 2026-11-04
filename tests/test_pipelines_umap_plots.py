@@ -9,9 +9,11 @@ import pytest
 from rosmap_processing.pipelines.umap_plots import (
     CATEGORICAL,
     MISSING_COLOR,
+    ORDINAL,
     OTHER_COLOR,
     build_panels,
     category_colors,
+    ordinal_colors,
     pick_gene_set,
     run_umap,
 )
@@ -92,6 +94,17 @@ def test_category_colors_order_and_other_celltype():
     # Text levels by size; the "Other" cell type is grey and takes no palette slot
     _, legend = category_colors(np.array(["Exc"] * 5 + ["Other"] * 3 + ["Ast"] * 2, dtype=object))
     assert legend == [("Exc", CATEGORICAL[0]), ("Other", OTHER_COLOR), ("Ast", CATEGORICAL[1])]
+
+
+def test_ordinal_colors_and_stage_order():
+    colors, legend = ordinal_colors(np.array([0, 2, 1, np.nan, 2.0]))
+    assert [label for label, _ in legend] == ["0", "1", "2", "missing"]
+    assert legend[0][1] == ORDINAL[0] and legend[2][1] == ORDINAL[-1]
+    assert colors[3] == MISSING_COLOR
+    # Numbered levels in numeric order, then the rest by size
+    values = np.array(["Phase 3"] * 5 + ["Phase 1"] * 2 + ["missing or unknown"] * 9 + ["Phase 2"], dtype=object)
+    _, legend = category_colors(values)
+    assert [label for label, _ in legend] == ["Phase 1", "Phase 2", "Phase 3", "missing or unknown"]
 
 
 def test_panels_hide_donors_and_large_batches():
