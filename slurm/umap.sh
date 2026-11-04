@@ -19,9 +19,9 @@
 SPEC="${1:?usage: sbatch slurm/umap.sh config/batch_effects/<name>.yaml [pipeline umap options]}"
 shift
 THREADS="${SLURM_CPUS_PER_TASK:-8}"
-# Mount config/ (the spec is read in the container) and keep the BLAS and
-# numba threads within the allocation.
-EXTRA_BINDS="--bind config/:/opt/app/config/ --env OMP_NUM_THREADS=$THREADS --env OPENBLAS_NUM_THREADS=$THREADS --env MKL_NUM_THREADS=$THREADS --env NUMBA_NUM_THREADS=$THREADS"
+# Mount config/ (the spec is read in the container), keep the BLAS and numba
+# threads within the allocation, and give numba (umap) a writable cache.
+EXTRA_BINDS="--bind config/:/opt/app/config/ --env OMP_NUM_THREADS=$THREADS --env OPENBLAS_NUM_THREADS=$THREADS --env MKL_NUM_THREADS=$THREADS --env NUMBA_NUM_THREADS=$THREADS --env NUMBA_CACHE_DIR=/tmp/numba"
 source slurm/common.sh
 
 echo "spec: $SPEC $*"
