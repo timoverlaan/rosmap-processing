@@ -50,7 +50,7 @@ skip_if_exists "$REF/sex_chromosome_gene_ids.txt" \
 
 # DiverseCohorts: its 27,984 genes are Ensembl 91 with the 3.0.0 filter, in
 # order, so the map is exact by position. (Not GENCODE v32: matching its names
-# there gave 243 genes another gene's ID.) Its X and Y genes keep their IDs in
+# there gave 332 genes an ID other than their own.) Its X and Y genes keep their IDs in
 # Ensembl 93, so the X/Y list above covers the gene sets it is used with.
 if [ -e "$DC_COUNTS" ]; then
     skip_if_exists "$REF/diverse_cohorts_gene_map.tsv" \
