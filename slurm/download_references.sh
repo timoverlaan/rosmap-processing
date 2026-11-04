@@ -5,6 +5,7 @@
 #
 #   bash slurm/download_references.sh
 #
+#   Ensembl 84 GTF     -> Cell Ranger GRCh38-1.2.0 (DiverseCohorts), ~45 MB
 #   Ensembl 93 GTF     -> Cell Ranger GRCh38-3.0.0 (ROSMAP-MIT / Mathys 2023), ~45 MB
 #   GENCODE v32 GTF    -> GRCh38-2020-A (SeaAD, Green 2024 ROSMAP), ~40 MB
 
@@ -25,5 +26,6 @@ fetch() {
     echo "downloaded: $out ($(du -h "$out" | cut -f1))"
 }
 
+fetch https://ftp.ensembl.org/pub/release-84/gtf/homo_sapiens/Homo_sapiens.GRCh38.84.gtf.gz
 fetch https://ftp.ensembl.org/pub/release-93/gtf/homo_sapiens/Homo_sapiens.GRCh38.93.gtf.gz
 fetch https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_32/gencode.v32.primary_assembly.annotation.gtf.gz

@@ -38,6 +38,13 @@ _IG_TR = [
 
 # 10x's documented build steps for each reference.
 RECIPES: Dict[str, Dict] = {
+    "cellranger-GRCh38-1.2.0": {
+        "gtf": "Homo_sapiens.GRCh38.84.gtf.gz (Ensembl release 84)",
+        "type_attr": "gene_biotype",
+        "biotypes": frozenset(["protein_coding", "lincRNA", "antisense", *_IG_TR]),
+        "transcript_filter": False,
+        "n_genes": 33694,
+    },
     "cellranger-GRCh38-3.0.0": {
         "gtf": "Homo_sapiens.GRCh38.93.gtf.gz (Ensembl release 93)",
         "type_attr": "gene_biotype",
