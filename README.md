@@ -16,7 +16,7 @@ aggregates for the ad-prs project.
 | `ROSMAP_MIT` | Mathys et al., *Cell* 2023 (MIT) | 2,342,020 / 427 | 33,538 (Cell Ranger GRCh38-3.0.0, Ensembl 93) | [Synapse syn52293417](https://www.synapse.org/#!Synapse:syn52293417) |
 | `ROSMAP` | Green et al., *Nature* 2024 (De Jager / Habib labs) | 1,649,672 / 437 | 18,745–20,326 per cell class (GRCh38-2020-A, filtered per class) | Synapse syn53366818 (see `SYNAPSE_IDS_ROSMAP`) |
 | `SeaAD` | SEA-AD, prefrontal cortex (A9) | 1,395,601 / 83 | 36,601 (GRCh38-2020-A, GENCODE v32) | [AWS open data](https://registry.opendata.aws/allen-sea-ad-atlas/) |
-| `DiverseCohorts` | AMP-AD DiverseCohorts (Rush), 10x multiome gene expression, DLPFC only | 1,812,921 / 412 | 27,984 (GENCODE v32 names; 26,306 mapped) | Synapse, study AMP-AD_DiverseCohorts (see `SYNAPSE_IDS_DIVERSE_COHORTS`) |
+| `DiverseCohorts` | AMP-AD DiverseCohorts (Rush), 10x multiome gene expression, DLPFC only | 1,812,921 / 412 | 27,984 (Ensembl 91 names; all mapped) | Synapse, study AMP-AD_DiverseCohorts (see `SYNAPSE_IDS_DIVERSE_COHORTS`) |
 | `PsychAD` | PsychAD (Lee et al. 2024, Mount Sinai), hashed donor pools, DLPFC | 6,320,459 / 1,494 | 34,890 (named by Ensembl ID) | Synapse, study MSSM_PsychAD (see `SYNAPSE_IDS_PSYCHAD`) |
 
 In the Green 2024 objects each cell class keeps only genes detected in at least

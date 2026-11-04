@@ -17,6 +17,7 @@
 
 source slurm/common.sh
 mkdir -p "$REF"
+ENS91=data/reference/Homo_sapiens.GRCh38.91.gtf.gz
 ENS93=data/reference/Homo_sapiens.GRCh38.93.gtf.gz
 GENCODE32=data/reference/gencode.v32.primary_assembly.annotation.gtf.gz
 
@@ -47,11 +48,13 @@ skip_if_exists "$REF/sex_chromosome_gene_ids.txt" \
     rp genes on-chromosomes --gtf "$ENS93" "$GENCODE32" --chromosomes X Y \
         --output "$REF/sex_chromosome_gene_ids.txt"
 
-# DiverseCohorts: Cell Ranger ARC's GRCh38-2020-A-2.0.0, the same GENCODE v32
-# gene list; the matrices keep 27,984 of its genes, so this is name matching.
+# DiverseCohorts: its 27,984 genes are Ensembl 91 with the 3.0.0 filter, in
+# order, so the map is exact by position. (Not GENCODE v32: matching its names
+# there gave 243 genes another gene's ID.) Its X and Y genes keep their IDs in
+# Ensembl 93, so the X/Y list above covers the gene sets it is used with.
 if [ -e "$DC_COUNTS" ]; then
     skip_if_exists "$REF/diverse_cohorts_gene_map.tsv" \
-        rp genes build-map --gtf "$GENCODE32" --recipe cellranger-GRCh38-2020-A \
+        rp genes build-map --gtf "$ENS91" --recipe ensembl91-cellranger-filter \
             --h5ad "$DC_COUNTS" --output "$REF/diverse_cohorts_gene_map.tsv"
 fi
 

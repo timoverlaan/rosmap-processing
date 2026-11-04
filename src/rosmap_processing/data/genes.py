@@ -7,6 +7,10 @@ The datasets carry only gene symbols, from different 10x references:
 - SeaAD and the Green 2024 ROSMAP atlas: 36,601 features = GRCh38-2020-A
   (GENCODE v32 primary assembly, filtered on gene and transcript type, without
   readthrough and chrY PAR transcripts).
+- DiverseCohorts: 27,984 features = Ensembl 91 with the GRCh38-3.0.0 filter
+  (no 10x reference; found by comparing its gene list with Ensembl 84-93 and
+  GENCODE v32, Nov 2026).
+- PsychAD names its genes by Ensembl ID, so it needs no reference.
 
 Symbols change between releases, so matching across datasets by symbol loses
 genes. This module rebuilds each reference's feature list from the public GTF
@@ -38,12 +42,14 @@ _IG_TR = [
 
 # 10x's documented build steps for each reference.
 RECIPES: Dict[str, Dict] = {
-    "cellranger-GRCh38-1.2.0": {
-        "gtf": "Homo_sapiens.GRCh38.84.gtf.gz (Ensembl release 84)",
+    # Not a 10x reference: Ensembl 91 with 10x's GRCh38-3.0.0 filter, which
+    # DiverseCohorts' gene list equals in order
+    "ensembl91-cellranger-filter": {
+        "gtf": "Homo_sapiens.GRCh38.91.gtf.gz (Ensembl release 91)",
         "type_attr": "gene_biotype",
         "biotypes": frozenset(["protein_coding", "lincRNA", "antisense", *_IG_TR]),
         "transcript_filter": False,
-        "n_genes": 33694,
+        "n_genes": 27984,
     },
     "cellranger-GRCh38-3.0.0": {
         "gtf": "Homo_sapiens.GRCh38.93.gtf.gz (Ensembl release 93)",

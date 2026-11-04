@@ -44,8 +44,8 @@ def test_cellranger_3_recipe_filters_on_gene_biotype(tmp_path):
     ])
     ref = read_reference_genes(gtf, "cellranger-GRCh38-3.0.0")
     assert ref["gene_id"].tolist() == ["ENSG01", "ENSG03"]
-    # 1.2.0 (Ensembl 84) uses the same filter
-    assert read_reference_genes(gtf, "cellranger-GRCh38-1.2.0")["gene_id"].tolist() == ["ENSG01", "ENSG03"]
+    # DiverseCohorts' Ensembl 91 list uses the same filter
+    assert read_reference_genes(gtf, "ensembl91-cellranger-filter")["gene_id"].tolist() == ["ENSG01", "ENSG03"]
 
 
 def test_2020a_recipe_drops_readthrough_par_and_versions(tmp_path):

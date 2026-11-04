@@ -102,7 +102,8 @@ Also supports `ROSMAP` and `ROSMAP_MIT` renames (not used by the pipeline).
 ### `genes build-map`
 ```bash
 python -m rosmap_processing genes build-map --gtf <annotation.gtf.gz> \
-    --recipe cellranger-GRCh38-3.0.0|cellranger-GRCh38-2020-A --h5ad <data.h5ad> --output <map.tsv>
+    --recipe cellranger-GRCh38-3.0.0|cellranger-GRCh38-2020-A|ensembl91-cellranger-filter \
+    --h5ad <data.h5ad> --output <map.tsv>
 ```
 Rebuilds the 10x reference's gene list from the GTF it was built from and maps
 each gene symbol of the h5ad to an Ensembl ID. Output TSV columns: `var_name`,
@@ -113,7 +114,7 @@ data exactly, else `name`, `unique_symbol`, `unmatched` or `ambiguous`).
 |---|---|---|
 | ROSMAP-MIT (Mathys 2023), 33,538 genes | `cellranger-GRCh38-3.0.0` | Ensembl 93 |
 | SeaAD, Green 2024 ROSMAP, 36,601 genes | `cellranger-GRCh38-2020-A` | GENCODE v32 |
-| DiverseCohorts, 27,984 genes (name matching) | `cellranger-GRCh38-2020-A` | GENCODE v32 |
+| DiverseCohorts, 27,984 genes (no 10x reference; the 3.0.0 filter on Ensembl 91) | `ensembl91-cellranger-filter` | Ensembl 91 |
 | PsychAD, 34,890 genes named by Ensembl ID (kept; symbols added) | `cellranger-GRCh38-2020-A` | GENCODE v32 |
 
 ### `genes shared`
