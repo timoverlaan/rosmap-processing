@@ -241,6 +241,22 @@ def main():
     batch_parser.add_argument("spec", type=str, help="YAML spec, e.g. config/batch_effects/rosmap_mit.yaml")
     batch_parser.add_argument("--overwrite", action="store_true", help="Replace existing output tables")
 
+    # pipeline umap
+    umap_parser = pipeline_subparsers.add_parser(
+        "umap",
+        help="UMAP of a batch-effects spec's sampled cells, one panel per label (PNG)",
+    )
+    umap_parser.add_argument("spec", type=str, help="YAML spec, e.g. config/batch_effects/rosmap_mit.yaml")
+    umap_parser.add_argument("--gene-set", default=None,
+                             help="Gene set of the spec (default: seurat_v3_donor_2000, or mit_seurat_v3_donor_2000)")
+    umap_parser.add_argument("--annotate", nargs="+", default=[],
+                             help="Extra obs columns to colour by, e.g. the authors' subclasses")
+    umap_parser.add_argument("--output", type=Path, default=None,
+                             help="Output folder (default: data/v2/umap/<spec name>)")
+    umap_parser.add_argument("--max-cells-per-donor", type=int, default=None,
+                             help="Cells sampled per donor (default: the spec's max_cells_per_donor)")
+    umap_parser.add_argument("--overwrite", action="store_true", help="Replace an existing plot")
+
     # pipeline mathys2023-for-adprs
     from rosmap_processing.pipelines.mathys2023_for_adprs import DEFAULT_INPUT_DIR, DEFAULT_OUTPUT_DIR
 
@@ -493,6 +509,11 @@ def handle_pipeline_command(args):
     elif args.pipeline_command == "batch-effects":
         from rosmap_processing.pipelines.batch_effects import run_batch_effects
         run_batch_effects(args.spec, overwrite=args.overwrite)
+
+    elif args.pipeline_command == "umap":
+        from rosmap_processing.pipelines.umap_plots import run_umap
+        run_umap(args.spec, gene_set=args.gene_set, annotate=args.annotate, output=args.output,
+                 max_cells_per_donor=args.max_cells_per_donor, overwrite=args.overwrite)
 
     elif args.pipeline_command == "mathys2023-for-adprs":
         from rosmap_processing.pipelines.mathys2023_for_adprs import run_pipeline
