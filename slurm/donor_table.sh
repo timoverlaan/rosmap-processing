@@ -17,4 +17,4 @@
 EXTRA_BINDS="--bind config/:/opt/app/config/"
 source slurm/common.sh
 
-in_container pixi run python -m rosmap_processing.pipelines.donor_table config/donor_table.yaml "$@"
+rp pipeline donor-table config/donor_table.yaml "$@"

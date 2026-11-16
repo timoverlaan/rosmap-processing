@@ -20,4 +20,4 @@ THREADS="${SLURM_CPUS_PER_TASK:-8}"
 EXTRA_BINDS="--bind config/:/opt/app/config/ --env OMP_NUM_THREADS=$THREADS --env OPENBLAS_NUM_THREADS=$THREADS --env MKL_NUM_THREADS=$THREADS"
 source slurm/common.sh
 
-in_container pixi run python -m rosmap_processing.pipelines.pooled_pseudobulk config/pooled_pseudobulk.yaml "$@"
+rp pipeline pooled-pseudobulk config/pooled_pseudobulk.yaml "$@"

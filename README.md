@@ -56,6 +56,8 @@ data/v2/hvg_compare/          HVG variant lists and overlaps, per dataset
 data/v2/batch_effects/        obs column summaries and batch-effect tables (aggregates only)
 data/v2/qc/<dataset>/         data QC tables (aggregates); restricted/ holds the per-cell scan
 data/v2/qc/{identity,sex-de-compare}/  data QC across datasets
+data/v2/donors/               global donor table (restricted) + overlap, summary, conflicts (aggregates)
+data/v2/pooled_pseudobulk/    pooled pseudobulk.h5ad (restricted) + correction and disease tables (aggregates)
 ```
 
 Processed datasets:
@@ -80,7 +82,11 @@ many participants: do not use one to validate a model trained on the other.
 SeaAD is an independent cohort. DiverseCohorts is all Rush (ROS, MAP, MARS,
 CLINCORE) and PsychAD has 152 Rush donors; their Rush donors carry the ROSMAP
 individualID. DiverseCohorts shares 100 donors with MIT and 109 with Green;
-PsychAD only 6 and 4, and the two share 87 with each other.
+PsychAD only 6 and 4, and the two share 87 with each other. Over all five,
+2,385 persons, 409 of them in two or more datasets; `pipeline donor-table`
+links them (one row per person, harmonized covariates) and `pipeline
+pooled-pseudobulk` pools them per broad cell type, using the persons measured
+twice to check the dataset corrections.
 
 ## Running on DAIC
 
@@ -119,6 +125,8 @@ sbatch slurm/run_all_psychad.sh                   # -> data/v2/counts/PsychAD (a
 sbatch slurm/gene_maps.sh                         # again, for their gene maps
 sbatch slurm/batch_effects.sh config/batch_effects/<spec>.yaml  # diverse_cohorts*, psychad*, mit_vs_*, green_vs_*
 bash slurm/submit_qc.sh                           # login node: data QC, one job per scan and per check
+sbatch slurm/donor_table.sh                       # one row per person over the five datasets (minutes)
+sbatch slurm/pooled_pseudobulk.sh                 # pooled pseudobulk + dataset corrections (after the donor table)
 ```
 
 The batch-effect specs name obs columns (batch, cell type, covariates); check

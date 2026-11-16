@@ -241,6 +241,22 @@ def main():
     batch_parser.add_argument("spec", type=str, help="YAML spec, e.g. config/batch_effects/rosmap_mit.yaml")
     batch_parser.add_argument("--overwrite", action="store_true", help="Replace existing output tables")
 
+    # pipeline donor-table / pooled-pseudobulk
+    donor_table_parser = pipeline_subparsers.add_parser(
+        "donor-table",
+        help="One row per person over the datasets, harmonized covariates (table kept on the cluster)",
+    )
+    donor_table_parser.add_argument("spec", type=str, help="YAML spec, e.g. config/donor_table.yaml")
+    donor_table_parser.add_argument("--overwrite", action="store_true", help="Replace an existing donor table")
+    pooled_parser = pipeline_subparsers.add_parser(
+        "pooled-pseudobulk",
+        help="Pseudobulk pooled over the datasets; dataset corrections checked on persons measured twice",
+    )
+    pooled_parser.add_argument("spec", type=str, help="YAML spec, e.g. config/pooled_pseudobulk.yaml")
+    pooled_parser.add_argument("--overwrite", action="store_true",
+                               help="Replace the output tables (reusing an existing pseudobulk.h5ad)")
+    pooled_parser.add_argument("--rebuild", action="store_true", help="Also rebuild pseudobulk.h5ad from the counts")
+
     # pipeline qc-scan / qc-check
     qc_scan_parser = pipeline_subparsers.add_parser(
         "qc-scan",
@@ -527,6 +543,14 @@ def handle_pipeline_command(args):
     elif args.pipeline_command == "batch-effects":
         from rosmap_processing.pipelines.batch_effects import run_batch_effects
         run_batch_effects(args.spec, overwrite=args.overwrite)
+
+    elif args.pipeline_command == "donor-table":
+        from rosmap_processing.pipelines.donor_table import run_donor_table
+        run_donor_table(args.spec, overwrite=args.overwrite)
+
+    elif args.pipeline_command == "pooled-pseudobulk":
+        from rosmap_processing.pipelines.pooled_pseudobulk import run_pooled_pseudobulk
+        run_pooled_pseudobulk(args.spec, overwrite=args.overwrite, rebuild=args.rebuild)
 
     elif args.pipeline_command == "qc-scan":
         from rosmap_processing.pipelines.data_qc import run_scan

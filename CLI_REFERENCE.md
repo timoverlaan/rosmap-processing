@@ -256,6 +256,48 @@ donors, as `mit_vs_seaad.yaml`), and the shared-donor specs
 individualID). PsychAD shares only 6 donors with MIT and 4 with Green; the
 Green one stops with "The disease label needs exactly 2 values".
 
+### `pipeline donor-table`
+```bash
+python -m rosmap_processing pipeline donor-table config/donor_table.yaml [--overwrite]
+```
+One row per person over the datasets. The spec names, per dataset, the count
+file, its own donor key (`donor`, as in its processed files), the key that
+identifies a person across datasets (`person`: the ROSMAP individualID), and
+how each harmonized variable is read from the obs columns: a column with an
+optional recode map (unlisted values become missing), a number, a constant, or
+a set of checkbox columns (SEA-AD's race). A list of sources takes the first
+with a value. Labels outside a variable's allowed values stop the run with
+their names, so a new level must be recoded explicitly. Where a person is in
+several datasets, the first dataset in the spec with a value gives it.
+Outputs in `data/v2/donors/`: `donor_table.tsv` (restricted, stays on the
+cluster), and the aggregates `overlap.tsv` (persons per combination of
+datasets), `summary.tsv` (counts per level, medians and quartiles; no
+minima or maxima) and `conflicts.tsv` (per variable and pair of datasets, how
+often the same person's values differ). Reads obs columns only (about a
+minute).
+
+### `pipeline pooled-pseudobulk`
+```bash
+python -m rosmap_processing pipeline pooled-pseudobulk config/pooled_pseudobulk.yaml [--overwrite | --rebuild]
+```
+Pseudobulk sums per dataset x donor x broad cell type over the Ensembl IDs
+every count file has, after the cell filters of `pipeline batch-effects`,
+linked to persons and covariates through the donor table
+(`pseudobulk.h5ad`, restricted). Per cell type, on log2-CPM of the genes with
+a mean CPM of at least `min_cpm` in every dataset, it compares four ways to
+remove the dataset effect: none, centering each dataset, regression on dataset
++ `protect` covariates removing only the dataset terms, and offsets anchored
+on persons measured in two datasets (purely technical; datasets without such
+persons are centered on the anchored ones). Each is scored on dataset mixing
+(PC regression, classifier accuracy), on the replicates (is a person's profile
+in one dataset closest to their own in the other; cross-fitted for the
+anchored offsets) and on the disease signal: the reference model has one
+sample per person and the dataset as a covariate (`de_pooled.tsv`, per gene),
+compared with each dataset alone and each correction without a dataset term.
+`offsets.tsv` compares the centering and regression offsets with the anchored
+ones. `--overwrite` reruns the analyses on the existing pseudobulk;
+`--rebuild` also re-reads the count files.
+
 ### `pipeline umap`
 ```bash
 python -m rosmap_processing pipeline umap config/batch_effects/<name>.yaml \
