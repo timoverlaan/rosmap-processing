@@ -1144,7 +1144,7 @@ def _identity_pair(sa: Scan, sb: Scan, keys: List[str], spec: Dict[str, Any], re
         stacked.append(np.arctanh(np.clip(full, -0.999999, 0.999999)))
         rows.append(_rank_row(corr, t, len(top)))
     if not stacked:
-        return rows
+        return rows, pd.Series(dtype=float)
     # Mean Fisher z over the cell types each pair has, back to a correlation
     combined = np.tanh(np.nanmean(np.stack(stacked), axis=0))
     observed = np.isfinite(np.diag(combined))
@@ -1152,10 +1152,11 @@ def _identity_pair(sa: Scan, sb: Scan, keys: List[str], spec: Dict[str, Any], re
     sub = np.where(np.isfinite(sub), sub, -np.inf)
     rows.append(_rank_row(sub, "combined", np.nan))
     ranks = 1 + (sub > np.diag(sub)[:, None]).sum(axis=1)
+    ranks_ba = 1 + (sub > np.diag(sub)[None, :]).sum(axis=0)
     keys_obs = np.array(keys)[observed]
     pd.DataFrame({"match": keys_obs, "rank_of_own_profile": ranks})[ranks > 1].to_csv(
         restricted / f"identity_follow_up_{sa.name}_{sb.name}.tsv", sep="\t", index=False)
-    return rows
+    return rows, pd.Series(np.maximum(ranks, ranks_ba), index=keys_obs)
 
 
 def _rank_row(corr: np.ndarray, celltype: str, n_genes) -> Dict[str, Any]:
@@ -1190,7 +1191,7 @@ def _sex_expression_pair(sa: Scan, sb: Scan, keys: List[str], restricted: Path) 
     for scan in (sa, sb):
         path = Path(scan.spec["output_dir"]) / "restricted" / "sex_by_donor.tsv"
         if not path.exists():
-            return []
+            return [], []
         table = pd.read_csv(path, sep="\t", dtype={"donor": str})
         table["match"] = scan.donors["match"].to_numpy()
         calls.append(table.dropna(subset=["match"]).drop_duplicates("match").set_index("match").loc[keys])
@@ -1210,7 +1211,7 @@ def _sex_expression_pair(sa: Scan, sb: Scan, keys: List[str], restricted: Path) 
     if odd:
         pd.DataFrame(odd, columns=["match", "expression_off_in"]).to_csv(
             restricted / f"sex_follow_up_{sa.name}_{sb.name}.tsv", sep="\t", index=False)
-    return rows
+    return rows, [k for k, _ in odd]
 
 
 def check_identity(specs: List[Dict[str, Any]], output: Path) -> Dict[str, pd.DataFrame]:
@@ -1226,10 +1227,19 @@ def check_identity(specs: List[Dict[str, Any]], output: Path) -> Dict[str, pd.Da
         logger.info(f"{sa.name} vs {sb.name}: {len(keys)} donors in both")
         if len(keys) < specs[0]["min_donors_per_group"]:
             continue
-        for row in _metadata_pair(a.loc[keys], b.loc[keys]) + _sex_expression_pair(sa, sb, keys, restricted):
-            meta_rows.append({"dataset_a": sa.name, "dataset_b": sb.name, "n_shared": len(keys), **row})
-        rows = _identity_pair(sa, sb, keys, specs[0], restricted)
+        sex_rows, sex_off = _sex_expression_pair(sa, sb, keys, restricted)
+        rows, ranks = _identity_pair(sa, sb, keys, specs[0], restricted)
         expr_rows += [{"dataset_a": sa.name, "dataset_b": sb.name, **r} for r in rows]
+        # Donors whose expression sex contradicts the record in one dataset:
+        # does their expression still match their own profile in the other?
+        if sex_off:
+            off = ranks.reindex(sex_off).dropna()
+            for name, hit in (("own_profile_best_of_sex_off_donors", off == 1),
+                              ("own_profile_rank_above_10_of_sex_off_donors", off > 10)):
+                sex_rows.append({"covariate": name, "n_both": len(off), "n_agree": int(hit.sum()),
+                                 "pct_agree": 100 * float(hit.mean()) if len(off) else np.nan})
+        for row in _metadata_pair(a.loc[keys], b.loc[keys]) + sex_rows:
+            meta_rows.append({"dataset_a": sa.name, "dataset_b": sb.name, "n_shared": len(keys), **row})
     out = {"identity_metadata": pd.DataFrame(meta_rows), "identity_expression": pd.DataFrame(expr_rows)}
     _log_table("all", "shared donors: metadata", out["identity_metadata"])
     _log_table("all", "shared donors: expression", out["identity_expression"])
