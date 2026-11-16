@@ -241,6 +241,24 @@ def main():
     batch_parser.add_argument("spec", type=str, help="YAML spec, e.g. config/batch_effects/rosmap_mit.yaml")
     batch_parser.add_argument("--overwrite", action="store_true", help="Replace existing output tables")
 
+    # pipeline qc-scan / qc-check
+    qc_scan_parser = pipeline_subparsers.add_parser(
+        "qc-scan",
+        help="One pass over a count file for the data QC checks (per-cell and per-donor data, kept on the cluster)",
+    )
+    qc_scan_parser.add_argument("spec", type=str, help="QC spec, e.g. config/data_qc/rosmap_mit.yaml")
+    qc_scan_parser.add_argument("--overwrite", action="store_true", help="Redo an existing scan")
+    from rosmap_processing.pipelines.data_qc import CHECKS as QC_CHECKS
+    qc_check_parser = pipeline_subparsers.add_parser(
+        "qc-check", help="A data QC check on qc-scan output (aggregate tables only)",
+    )
+    qc_check_parser.add_argument("check", choices=QC_CHECKS)
+    qc_check_parser.add_argument("specs", type=str, nargs="+", help="QC spec(s)")
+    qc_check_parser.add_argument("--output", type=Path, default=None,
+                                 help="Output folder (default: the spec's output_dir, or data/v2/qc/<check>)")
+    qc_check_parser.add_argument("--mathys2019", type=Path, default=None,
+                                 help="Mathys 2019 DEG table (ad-de), e.g. data/mathys2019_DEGs.csv")
+
     # pipeline umap
     umap_parser = pipeline_subparsers.add_parser(
         "umap",
@@ -509,6 +527,14 @@ def handle_pipeline_command(args):
     elif args.pipeline_command == "batch-effects":
         from rosmap_processing.pipelines.batch_effects import run_batch_effects
         run_batch_effects(args.spec, overwrite=args.overwrite)
+
+    elif args.pipeline_command == "qc-scan":
+        from rosmap_processing.pipelines.data_qc import run_scan
+        run_scan(args.spec, overwrite=args.overwrite)
+
+    elif args.pipeline_command == "qc-check":
+        from rosmap_processing.pipelines.data_qc import run_check
+        run_check(args.check, args.specs, output=args.output, mathys2019=args.mathys2019)
 
     elif args.pipeline_command == "umap":
         from rosmap_processing.pipelines.umap_plots import run_umap

@@ -1,0 +1,9 @@
+# Data QC for ROSMAP Green 2024 (see rosmap_mit.yaml). Seurat's nCount_RNA and
+# nFeature_RNA are the authors' per-cell UMIs and genes.
+output_dir: data/v2/qc/rosmap_green
+batch_effects: ../batch_effects/rosmap_green.yaml
+match_on: individualID
+author_label: state
+author_qc: {umis: nCount_RNA, genes: nFeature_RNA}
+covariates:
+  cogdx: {column: cogdx}

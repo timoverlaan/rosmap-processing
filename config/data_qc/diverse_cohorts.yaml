@@ -1,0 +1,41 @@
+# Data QC for AMP-AD DiverseCohorts, DLPFC cells (see rosmap_mit.yaml). The
+# authors' per-cell UMIs, genes and mitochondrial % are in the cell table,
+# keyed by <pool>_<barcode> like the count file's cells.
+output_dir: data/v2/qc/diverse_cohorts
+batch_effects: ../batch_effects/diverse_cohorts.yaml
+match_on: individualID
+author_label: subcellclass
+author_qc_table:
+  path: data/v2/download/DiverseCohorts/rosmap_diversity_snmultiome_clusterdata_20241107.csv
+  index: [batch, barcode]
+  sep: "_"
+  columns: {umis: nCount_RNA, genes: nFeature_RNA, mito_pct: mt_percent}
+covariates:
+  cogdx: {column: cogdx_rush}
+# The three sources of donor metadata in the file: the Rush cell table
+# (*_rush, sex), the AMP-AD individual metadata (Braak, amyCerad, ageDeath,
+# apoeGenotype) and the ROSMAP clinical CSV (ROS and MAP participants only)
+metadata_sources:
+  cogdx: [cogdx_rush, cogdx]
+  braak:
+    - {column: braak_rush, numeric: true}
+    - {column: Braak, numeric: true, recode: {"Stage 0": 0, "Stage I": 1, "Stage II": 2, "Stage III": 3,
+                                              "Stage IV": 4, "Stage V": 5, "Stage VI": 6}}
+    - {column: braaksc, numeric: true}
+  cerad:
+    - {column: cerad_rush, numeric: true, recode: {"1": 3, "2": 2, "3": 1, "4": 0}}
+    - {column: amyCerad, numeric: true, recode: {"None/No AD/C0": 0, "Sparse/Possible/C1": 1,
+                                                 "Moderate/Probable/C2": 2, "Frequent/Definite/C3": 3}}
+    - {column: ceradsc, numeric: true, recode: {"1": 3, "2": 2, "3": 1, "4": 0}}
+  sex:
+    - {column: sex, sex: true}
+    - {column: msex, sex: true}
+  age:
+    - {column: ageDeath, numeric: true, tolerance: 1}
+    - {column: age_death, numeric: true, tolerance: 1}
+  apoe: [apoeGenotype, apoe_genotype]
+# Libraries with gene-expression reads on Synapse but no ATAC fragment file
+# (syn53643818 vs syn71463814, checked 2026-11-16)
+pool_column: batch
+pools:
+  without_atac_fragments: [VR223, VR328]

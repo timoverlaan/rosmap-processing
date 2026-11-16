@@ -1,0 +1,11 @@
+# Data QC for ROSMAP-MIT (Mathys 2023): `pipeline qc-scan`, then the checks of
+# `pipeline qc-check` (slurm/qc_scan.sh, slurm/qc_check.sh, slurm/submit_qc.sh).
+# The count file, gene map, donor, cell types and covariates are those of the
+# batch-effects spec. The file has no per-cell QC columns of the authors.
+output_dir: data/v2/qc/rosmap_mit
+batch_effects: ../batch_effects/rosmap_mit.yaml
+match_on: individualID
+# Cells no cell-type rule matches (CAMs, T cells) are reported by this label
+author_label: cell_type_high_resolution
+covariates:
+  cogdx: {column: cogdx}

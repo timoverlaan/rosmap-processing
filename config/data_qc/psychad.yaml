@@ -1,0 +1,27 @@
+# Data QC for PsychAD (see rosmap_mit.yaml). n_counts and n_genes are the
+# authors' per-cell UMIs and genes (their obs).
+output_dir: data/v2/qc/psychad
+batch_effects: ../batch_effects/psychad.yaml
+match_on: individualID
+author_label: subclass
+author_qc: {umis: n_counts, genes: n_genes}
+# The ROSMAP cogdx (ROS and MAP donors only)
+covariates:
+  cogdx: {column: cogdx}
+# NPS-AD metadata vs the ROSMAP clinical CSV, for the Rush ROS and MAP donors
+metadata_sources:
+  braak:
+    - {column: Braak, numeric: true, recode: {"Stage 0": 0, "Stage I": 1, "Stage II": 2, "Stage III": 3,
+                                              "Stage IV": 4, "Stage V": 5, "Stage VI": 6}}
+    - {column: braaksc, numeric: true}
+  cerad:
+    - {column: amyCerad, numeric: true, recode: {"None/No AD/C0": 0, "Sparse/Possible/C1": 1,
+                                                 "Moderate/Probable/C2": 2, "Frequent/Definite/C3": 3}}
+    - {column: ceradsc, numeric: true, recode: {"1": 3, "2": 2, "3": 1, "4": 0}}
+  sex:
+    - {column: sex, sex: true}
+    - {column: msex, sex: true}
+  age:
+    - {column: ageDeath, numeric: true, tolerance: 1}
+    - {column: age_death, numeric: true, tolerance: 1}
+  apoe: [apoeGenotype, apoe_genotype]

@@ -1,0 +1,9 @@
+# Data QC for SEA-AD MTG/PFC (see rosmap_mit.yaml). No donor is in another
+# dataset, so it has no match key.
+output_dir: data/v2/qc/seaad
+batch_effects: ../batch_effects/seaad.yaml
+author_label: Subclass
+author_qc:
+  umis: Number of UMIs
+  genes: Genes detected
+  mito_fraction: Fraction mitochondrial UMIs
