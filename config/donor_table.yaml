@@ -1,0 +1,139 @@
+# Global donor table: one row per person over the five v2 datasets
+#   sbatch slurm/donor_table.sh
+# Persons are matched on the ROSMAP individualID (Rush donors in MIT, Green,
+# DiverseCohorts and PsychAD); SEA-AD's donors are its own. Datasets are in
+# priority order: where a person's value differs between datasets, the first
+# one with a value gives it (conflicts.tsv counts the differences).
+#
+# Harmonized variables (pipelines/donor_table.py, VARIABLES):
+#   sex female/male; age_death in years (capped ages such as '90+' -> 90;
+#   age_capped caps everyone at 90); race; hispanic no/yes; educ in years;
+#   pmi in hours; apoe_genotype as '34' (apoe4 = number of e4 alleles);
+#   cogdx Rush's 1-6; dementia no/yes; cdr; braak 0-6; cerad 0 none -
+#   3 frequent plaques; thal 0-5; adnc 0 not AD - 3 high; crossdis_dx
+#   PsychAD's Tier 1 cross-disorder diagnosis.
+#
+# Dementia: Rush cogdx 4-6 (Alzheimer's or other dementia) vs 1-3 (no
+# impairment or MCI); SEA-AD's cognitive status (its neurotypical reference
+# donors count as no dementia); PsychAD's other donors CDR >= 1 vs 0-0.5,
+# which matches cogdx's MCI-as-no split.
+output_dir: data/v2/donors
+
+datasets:
+  rosmap_mit:
+    counts: data/v2/counts/ROSMAP_MIT/combined.h5ad
+    donor: projid
+    person: individualID
+    variables: &rosmap
+      projid: {column: projid}
+      cohort: {column: Study}
+      brain_bank: {value: Rush}
+      sex: {column: msex, recode: {"0": female, "1": male}}
+      age_death: {column: age_death, numeric: true}
+      # RADC race codes; 7 (unknown) is missing
+      race: {column: race, recode: {"1": White, "2": Black or African American,
+                                    "3": American Indian or Alaska Native,
+                                    "4": Native Hawaiian or Pacific Islander, "5": Asian, "6": Other}}
+      hispanic: {column: spanish, recode: {"1": "yes", "2": "no"}}
+      educ: {column: educ, numeric: true}
+      pmi: {column: pmi, numeric: true}
+      apoe_genotype: {column: apoe_genotype}
+      cogdx: {column: cogdx}
+      dementia: {column: cogdx, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
+      braak: {column: braaksc}
+      cerad: {column: ceradsc, recode: {"1": 3, "2": 2, "3": 1, "4": 0}}
+  rosmap_green:
+    counts: data/v2/counts/ROSMAP/combined.h5ad
+    donor: individualID
+    person: individualID
+    variables: *rosmap
+  diverse_cohorts:
+    counts: data/v2/counts/DiverseCohorts/combined.h5ad
+    donor: individualID
+    person: individualID
+    # Rush's cogdx, Braak and CERAD (cell table) and the individual metadata
+    # cover every donor; the ROSMAP columns (educ, pmi) only ROS and MAP
+    variables:
+      projid: {column: projid}
+      cohort: {column: cohort}
+      brain_bank: {value: Rush}
+      sex: {column: sex}
+      age_death: {column: ageDeath, numeric: true}
+      race: &race {column: race, recode: {White: White, Black or African American: Black or African American,
+                                          Asian: Asian, American Indian or Alaska Native: American Indian or Alaska Native,
+                                          other: Other}}
+      hispanic: &hispanic {column: isHispanic, recode: {"True": "yes", "False": "no"}}
+      educ: {column: educ, numeric: true}
+      pmi:
+        - {column: PMI, numeric: true}
+        - {column: pmi, numeric: true}
+      apoe_genotype: &apoe {column: apoeGenotype, recode: {"22": "22", "23": "23", "24": "24", "33": "33",
+                                                           "34": "34", "44": "44"}}
+      cogdx: {column: cogdx_rush}
+      dementia: {column: cogdx_rush, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
+      braak: {column: braak_rush}
+      cerad: {column: cerad_rush, recode: {"1": 3, "2": 2, "3": 1, "4": 0}}
+  psychad:
+    counts: data/v2/counts/PsychAD/combined.h5ad
+    donor: individualID
+    person: individualID
+    variables:
+      projid: {column: projid}
+      cohort: {column: cohort}
+      brain_bank: {column: Source, recode: {RADC: Rush, MSSM: Mount Sinai, HBCC: NIMH HBCC}}
+      sex: {column: sex}
+      age_death: {column: ageDeath, numeric: true}
+      race: *race
+      hispanic: *hispanic
+      educ: {column: educ, numeric: true}
+      pmi: {column: PMI, numeric: true}
+      apoe_genotype: *apoe
+      cogdx: {column: cogdx}
+      # The ROSMAP cogdx for the Rush donors, else the CDR
+      dementia:
+        - {column: cogdx, recode: {"1": "no", "2": "no", "3": "no", "4": "yes", "5": "yes", "6": "yes"}}
+        - {column: CDR, recode: {"0": "no", "0.5": "no", "1": "yes", "2": "yes", "3": "yes", "4": "yes", "5": "yes"}}
+      cdr: {column: CDR}
+      # Braak written as Roman stages, CERAD as 'None/No AD/C0' etc.; the ROSMAP
+      # columns for Rush donors without them
+      braak:
+        - {column: Braak, recode: {"Stage 0": 0, "Stage I": 1, "Stage II": 2, "Stage III": 3,
+                                   "Stage IV": 4, "Stage V": 5, "Stage VI": 6}}
+        - {column: braaksc}
+      cerad:
+        - {column: amyCerad, recode: {"None/No AD/C0": 0, "Sparse/Possible/C1": 1,
+                                      "Moderate/Probable/C2": 2, "Frequent/Definite/C3": 3}}
+        - {column: ceradsc, recode: {"1": 3, "2": 2, "3": 1, "4": 0}}
+      crossdis_dx: {column: Tier1_crossDis_dx}
+  seaad:
+    counts:
+      - data/v2/counts/SeaAD/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad
+      - data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad
+    donor: Donor ID
+    person: Donor ID
+    variables:
+      cohort: {column: Primary Study Name}
+      brain_bank: {value: SEA-AD}
+      sex: {column: Sex, recode: {Female: female, Male: male}}
+      age_death: {column: Age at Death, numeric: true}
+      race:
+        checked: Checked
+        checkboxes:
+          White: "Race (choice=White)"
+          Black or African American: "Race (choice=Black/ African American)"
+          Asian: "Race (choice=Asian)"
+          American Indian or Alaska Native: "Race (choice=American Indian/ Alaska Native)"
+          Native Hawaiian or Pacific Islander: "Race (choice=Native Hawaiian or Pacific Islander)"
+          Other: "Race (choice=Other)"
+      hispanic: {column: Hispanic/Latino, recode: {"No": "no", "Yes": "yes"}}
+      educ: {column: Years of education, numeric: true}
+      pmi: {column: PMI, numeric: true}
+      apoe_genotype: {column: APOE Genotype, recode: {"2/2": "22", "2/3": "23", "2/4": "24", "3/3": "33",
+                                                      "3/4": "34", "4/4": "44"}}
+      dementia: {column: Cognitive Status, recode: {"Dementia": "yes", "No dementia": "no", "Reference": "no"}}
+      braak: {column: Braak, recode: {"Braak 0": 0, "Braak I": 1, "Braak II": 2, "Braak III": 3,
+                                      "Braak IV": 4, "Braak V": 5, "Braak VI": 6}}
+      thal: {column: Thal, recode: {"Thal 0": 0, "Thal 1": 1, "Thal 2": 2, "Thal 3": 3, "Thal 4": 4, "Thal 5": 5}}
+      cerad: {column: CERAD score, recode: {"Absent": 0, "Sparse": 1, "Moderate": 2, "Frequent": 3}}
+      adnc: {column: Overall AD neuropathological Change,
+             recode: {"Not AD": 0, "Low": 1, "Intermediate": 2, "High": 3}}
