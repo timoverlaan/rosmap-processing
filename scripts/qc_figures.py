@@ -126,18 +126,20 @@ def sex_check(qc: Path, out: Path) -> None:
         ax.set_xlabel("Y genes − XIST (log2 CPM)", fontsize=8)
         if j == 0:
             ax.set_ylabel("Donors")
+        # XIST has no Y copy, so XIST UMIs in a male donor's nuclei come from
+        # other (female) donors: ambient RNA or doublets in pooled libraries.
+        # (Y-gene UMIs in female nuclei also come from X-Y paralog mapping.)
         ax = axes[1, j]
-        for what, colour, label in (("y_in_female", "#e34948", "female: cells with Y UMIs"),
-                                    ("xist_in_male", "#2a78d6", "male: cells with XIST UMIs")):
-            part = h[h["recorded"] == what]
-            ax.bar(100 * part["bin_left"], part["n_donors"], width=1.0, align="edge", color=colour, alpha=0.75,
-                   label=label)
+        part = h[h["recorded"] == "xist_in_male"]
+        ax.bar(100 * part["bin_left"], part["n_donors"], width=1.0, align="edge", color="#2a78d6")
+        cell = read(qc, d, "sex_cell_level")
+        row = cell[cell["measure"] == "share of cells with XIST UMIs"].iloc[0]
+        ax.set_title(f"median {100 * row['value_p50']:.1f}% of nuclei", fontsize=8.5)
         ax.set_xlim(0, 60)
-        ax.set_xlabel("Share of a donor's nuclei (%)", fontsize=8)
+        ax.set_xlabel("Nuclei with XIST UMIs (%)", fontsize=8)
         if j == 0:
-            ax.set_ylabel("Donors")
+            ax.set_ylabel("Male donors")
     axes[0, 0].legend(loc="upper left", fontsize=7)
-    axes[1, 0].legend(loc="upper right", fontsize=7)
     fig.tight_layout()
     fig.savefig(out / "sex_check.png", dpi=200)
     plt.close(fig)
@@ -226,7 +228,7 @@ def de_controls(qc: Path, out: Path) -> None:
             x = np.arange(len(cts)) - 0.4 + width * (k + 0.5)
             ax.bar(x, part["pct_same_direction"], width=width * 0.9, color=COLOURS[d], label=NAMES[d])
         ax.axhline(50, color=INK2, lw=1, ls="--")
-        ax.text(len(cts) - 0.5, 51, "chance", ha="right", va="bottom", fontsize=7, color=INK2)
+        ax.text(-0.45, 47, "chance", ha="left", va="top", fontsize=7, color=INK2)
         ax.set_xticks(range(len(cts)), cts)
         ax.set_ylim(0, 100)
         ax.set_ylabel("Mathys 2019 DEGs in\nthe same direction (%)")

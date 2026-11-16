@@ -219,6 +219,16 @@ SEAAD_S3_PATHS = {
     "pfc_rnaseq": "PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad",
     "pfc_metadata": "PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei_metadata.2024-02-13.csv",
 }
+# The S3 object versions these were downloaded from: (version ID, ETag, size).
+# Both have had a delete marker since 2026-06-23, when the 2026-06-22 release
+# (SEAAD_DFC_RNAseq_*) replaced them; the old versions are still listed
+# (ListObjectVersions). The local h5ad matches its ETag (5 MiB parts) and size,
+# MD5 8e67b2e4b0e30e4d4188b844c8380680 (slurm/seaad_hash.sh, 2026-11-16).
+SEAAD_S3_VERSIONS = {
+    "pfc_rnaseq": ("null", "aee9da58948f244edb388e0abe1e96f5-7237", 37938782321),
+    "pfc_metadata": ("null", "0a1ffa372bf354d9efb104b77517468e-276", 1444844786),
+}
+SEAAD_PFC_RNASEQ_MD5 = "8e67b2e4b0e30e4d4188b844c8380680"
 
 # Cell type mappings
 ROSMAP_MIT_CELL_CLASSES = {
@@ -294,6 +304,8 @@ __all__ = [
     # SeaAD S3
     "SEAAD_S3_BUCKET",
     "SEAAD_S3_PATHS",
+    "SEAAD_S3_VERSIONS",
+    "SEAAD_PFC_RNASEQ_MD5",
     # Cell type mappings
     "ROSMAP_MIT_CELL_CLASSES",
     # Pathology mappings
