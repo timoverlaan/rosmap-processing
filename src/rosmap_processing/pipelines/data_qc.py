@@ -598,6 +598,11 @@ def _log_table(name: str, title: str, table: pd.DataFrame) -> None:
         logger.info(f"[{name}] {title}\n{table.to_string(index=False)}")
 
 
+# Smallest spread used for the donor outlier rule (> 3 MAD from the median
+# donor), so a metric that is nearly constant (e.g. mitochondrial % in nuclei
+# preps with almost none) does not flag donors over trivial differences
+MAD_FLOOR = {"median_log10_umis": 0.05, "median_genes": 50.0, "median_mito_pct": 0.5, "neuron_share": 0.02}
+
 HISTOGRAMS = {
     "log10_umis": np.arange(1.5, 5.75, 0.05),
     "log10_genes": np.arange(1.5, 4.55, 0.05),
@@ -654,7 +659,7 @@ def check_cells(scan: Scan, min_genes: int = 200) -> Dict[str, pd.DataFrame]:
         v = per_donor[metric].to_numpy(np.float64)
         v = v[np.isfinite(v)]
         med = float(np.median(v))
-        mad = 1.4826 * float(np.median(np.abs(v - med)))
+        mad = max(1.4826 * float(np.median(np.abs(v - med))), MAD_FLOOR.get(metric, 0.0))
         row = {"dataset": scan.name, "metric": metric, "n_donors": len(v), **_quantile_row(v, "value"),
                "mad": mad, "n_low_outliers": int(np.sum(v < med - 3 * mad)) if mad > 0 else 0,
                "n_high_outliers": int(np.sum(v > med + 3 * mad)) if mad > 0 else 0}
@@ -666,7 +671,7 @@ def check_cells(scan: Scan, min_genes: int = 200) -> Dict[str, pd.DataFrame]:
     for metric in ("median_log10_umis", "median_genes", "median_mito_pct", "neuron_share"):
         v = per_donor[metric].to_numpy(np.float64)
         med = np.nanmedian(v)
-        mad = 1.4826 * np.nanmedian(np.abs(v - med))
+        mad = max(1.4826 * np.nanmedian(np.abs(v - med)), MAD_FLOOR.get(metric, 0.0))
         if mad > 0:
             any_outlier |= np.abs(v - med) > 3 * mad
     donor_rows.append({"dataset": scan.name, "metric": "any_outlier", "n_donors": len(per_donor),

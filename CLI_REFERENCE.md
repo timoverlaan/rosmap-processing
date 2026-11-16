@@ -276,6 +276,39 @@ get an ordered legend rather than a colour bar. Writes `umap_<gene set>.png`, `u
 `umap_<gene set>.json` (provenance). On DAIC: `sbatch slurm/umap.sh <spec>
 [options]`.
 
+### `pipeline qc-scan` and `pipeline qc-check`
+```bash
+python -m rosmap_processing pipeline qc-scan config/data_qc/<name>.yaml [--overwrite]
+python -m rosmap_processing pipeline qc-check CHECK config/data_qc/<name>.yaml [...] \
+    [--output DIR] [--mathys2019 data/mathys2019_DEGs.csv]
+```
+How well a count file was processed. A QC spec names the dataset block of a
+batch-effects spec (count file, gene map, donor, cell types, covariates) and
+adds the authors' per-cell QC values (`author_qc` obs columns, or
+`author_qc_table` for a CSV such as DiverseCohorts' cell table), the authors'
+label for cells no cell-type rule matches, the donor match key, and metadata
+sources to compare. `qc-scan` reads every cell once (no filters) and writes
+per-cell values and pseudobulk sums per donor x cell type to
+`<output_dir>/restricted/` (per-donor data: stays on the cluster). Each
+`qc-check` writes aggregate TSVs to the spec's `output_dir`:
+
+| Check | Tables |
+|---|---|
+| `totals` | `totals.tsv`: our per-cell UMIs, genes and mitochondrial % against the authors' (share exact, ratio) |
+| `cells` | `qc_cells.tsv` (quantiles per cell type and unmatched label), `qc_histograms.tsv`, `qc_donors.tsv` (donor medians, >3 MAD outliers) |
+| `sex` | `sex_summary.tsv`, `sex_calls.tsv`: sex from XIST and Y genes vs the recorded sex; `sex_cell_level.tsv`: share of a donor's nuclei with the other sex's transcripts |
+| `markers` | `markers.tsv`, `marker_specificity.tsv`, `composition.tsv`, `unmatched_labels.tsv` |
+| `sex-de` | `sex_de.tsv` (per gene and cell type, pseudobulk OLS with age), `sex_de_summary.tsv` |
+| `ad-de` | `ad_de.tsv`, `ad_de_summary.tsv`, `ad_de_mathys2019.tsv`: pathology (Braak ≥ III and CERAD ≥ moderate vs Braak ≤ II and CERAD ≤ sparse) and the disease label, against the Mathys 2019 DEG directions |
+| `metadata` | `metadata_agreement.tsv`, `metadata_confusion.tsv`: the `metadata_sources` compared per donor; `metadata_pools.tsv` |
+| `sex-de-compare` | (several specs, `data/v2/qc/sex-de-compare/`) concordance of the sex effects, ranks of known sex genes |
+| `identity` | (several specs, `data/v2/qc/identity/`) donors in two datasets: metadata agreement, and how often a donor's own pseudobulk profile is its best match in the other dataset |
+
+Donor IDs of sex or identity mismatches go to `restricted/*_follow_up.tsv` for
+follow-up on the cluster; they are never logged. On DAIC, `bash
+slurm/submit_qc.sh` submits everything (gene lists, five scans, one job per
+check); `scripts/qc_figures.py` draws the figures from the aggregate tables.
+
 ### `pipeline mathys2023-for-adprs`
 ```bash
 python -m rosmap_processing pipeline mathys2023-for-adprs \

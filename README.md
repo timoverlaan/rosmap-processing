@@ -46,7 +46,7 @@ data/v2/download/ROSMAP/      Green 2024 objects + ROSMAP metadata, fresh pinned
 data/v2/download/PsychAD/     PsychAD h5ad (after the authors' QC) + donor metadata
 data/v2/download/DiverseCohorts/  DiverseCohorts multiome expression matrices (.rda), cell tables, donor metadata
 data/v2/intermediate/DiverseCohorts/  the .rda matrices as HDF5 (src/convert_R/rdata_to_h5.R)
-data/reference/               Ensembl 93 and GENCODE v32 GTFs
+data/reference/               Ensembl 91 and 93 and GENCODE v32 GTFs
 data/v2/counts/<DATASET>/     raw counts in X (int32) + clinical metadata, per class and combined.h5ad
                               (RNA counts read straight from the .h5Seurat files, see below)
 data/v2/counts/SeaAD/         SeaAD with ROSMAP-style columns (counts in layer 'UMIs')
@@ -54,6 +54,8 @@ data/v2/reference/            gene maps (symbol -> Ensembl ID), shared_gene_ids.
 data/v2/processed/            processed datasets (below), mathys2023_for_adprs/
 data/v2/hvg_compare/          HVG variant lists and overlaps, per dataset
 data/v2/batch_effects/        obs column summaries and batch-effect tables (aggregates only)
+data/v2/qc/<dataset>/         data QC tables (aggregates); restricted/ holds the per-cell scan
+data/v2/qc/{identity,sex-de-compare}/  data QC across datasets
 ```
 
 Processed datasets:
@@ -116,6 +118,7 @@ sbatch slurm/run_all_diverse_cohorts.sh           # -> data/v2/counts/DiverseCoh
 sbatch slurm/run_all_psychad.sh                   # -> data/v2/counts/PsychAD (about 1 h)
 sbatch slurm/gene_maps.sh                         # again, for their gene maps
 sbatch slurm/batch_effects.sh config/batch_effects/<spec>.yaml  # diverse_cohorts*, psychad*, mit_vs_*, green_vs_*
+bash slurm/submit_qc.sh                           # login node: data QC, one job per scan and per check
 ```
 
 The batch-effect specs name obs columns (batch, cell type, covariates); check
