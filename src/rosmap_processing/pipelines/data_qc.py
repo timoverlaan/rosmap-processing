@@ -750,11 +750,13 @@ def check_sex(scan: Scan) -> Dict[str, pd.DataFrame]:
                   "n_donors": int(k)} for lo, hi, k in zip(edges[:-1], edges[1:], counts)]
 
     flagged = discordant | (called == "ambiguous")
-    follow_up = pd.DataFrame({"donor": scan.donors["donor"], "recorded": recorded, "expression": called,
-                              "log2_xist_cpm": x_score, "log2_y_cpm": y_score, "share_cells_y": frac_y,
-                              "share_cells_xist": frac_xist, "n_cells": n_cells})[flagged]
+    by_donor = pd.DataFrame({"donor": scan.donors["donor"], "recorded": recorded, "expression": called,
+                             "log2_xist_cpm": x_score, "log2_y_cpm": y_score, "share_cells_y": frac_y,
+                             "share_cells_xist": frac_xist, "n_cells": n_cells})
     restricted = _restricted(Path(scan.spec["output_dir"]))
-    follow_up.to_csv(restricted / "sex_follow_up.tsv", sep="\t", index=False)
+    by_donor[flagged].to_csv(restricted / "sex_follow_up.tsv", sep="\t", index=False)
+    # Every donor's call, for the identity check (same donors in other datasets)
+    by_donor[["donor", "recorded", "expression"]].to_csv(restricted / "sex_by_donor.tsv", sep="\t", index=False)
     logger.info(f"[{scan.name}] {int(flagged.sum())} donors to follow up -> {restricted / 'sex_follow_up.tsv'}")
     out = {"sex_summary": pd.DataFrame([summary]), "sex_calls": calls, "sex_cell_level": pd.DataFrame(cell_rows),
            "sex_histograms": pd.DataFrame(hist)}
@@ -1163,13 +1165,52 @@ def _rank_row(corr: np.ndarray, celltype: str, n_genes) -> Dict[str, Any]:
     rank_ba = 1 + (corr > own[None, :]).sum(axis=0)
     finite = np.where(np.isfinite(corr), corr, np.nan)
     off = finite[~np.eye(n, dtype=bool)]
+    # A donor without any own signal: its own correlation is not above the
+    # 95th percentile of its correlations with the other donors
+    others = np.where(np.eye(n, dtype=bool), np.nan, finite)
+    p95 = np.nanpercentile(others, 95, axis=1) if n > 2 else np.full(n, np.nan)
     return {"celltype": celltype, "n_donors": n, "n_genes": n_genes,
             "pct_own_best_a_to_b": 100 * float(np.mean(rank_ab == 1)),
             "pct_own_best_b_to_a": 100 * float(np.mean(rank_ba == 1)),
+            "pct_own_top5": 100 * float(np.mean(np.concatenate([rank_ab, rank_ba]) <= 5)),
+            "n_rank_above_10_a_to_b": int(np.sum(rank_ab > 10)),
+            "n_no_own_signal_a_to_b": int(np.sum(~(own > p95))),
             "median_rank": float(np.median(np.concatenate([rank_ab, rank_ba]))),
             "pct_chance": 100.0 / n,
             "mean_own_corr": float(np.nanmean(np.where(np.isfinite(own), own, np.nan))),
             "mean_other_corr": float(np.nanmean(off[np.isfinite(off)])) if np.isfinite(off).any() else np.nan}
+
+
+def _sex_expression_pair(sa: Scan, sb: Scan, keys: List[str], restricted: Path) -> List[Dict[str, Any]]:
+    """With both datasets' sex check: does a shared donor's expression sex
+    agree between the datasets, and where one dataset's expression contradicts
+    the recorded sex, does the other dataset's expression side with the
+    record (then that one dataset's sample is the odd one out)?"""
+    calls = []
+    for scan in (sa, sb):
+        path = Path(scan.spec["output_dir"]) / "restricted" / "sex_by_donor.tsv"
+        if not path.exists():
+            return []
+        table = pd.read_csv(path, sep="\t", dtype={"donor": str})
+        table["match"] = scan.donors["match"].to_numpy()
+        calls.append(table.dropna(subset=["match"]).drop_duplicates("match").set_index("match").loc[keys])
+    a, b = calls
+    sure = a["expression"].isin(["M", "F"]) & b["expression"].isin(["M", "F"])
+    rows = [{"covariate": "sex_expression", "n_both": int(sure.sum()),
+             "n_agree": int((a["expression"] == b["expression"])[sure].sum())}]
+    odd = []
+    for name, x, y in (("a", a, b), ("b", b, a)):
+        off = x["expression"].isin(["M", "F"]) & (x["expression"] != x["recorded"])
+        backed = off & (y["expression"] == y["recorded"])
+        rows.append({"covariate": f"sex_expression_off_in_{name}", "n_both": int(off.sum()),
+                     "n_agree": int(backed.sum())})
+        odd += [(k, name) for k in x.index[off]]
+    for r in rows:
+        r["pct_agree"] = 100 * r["n_agree"] / r["n_both"] if r["n_both"] else np.nan
+    if odd:
+        pd.DataFrame(odd, columns=["match", "expression_off_in"]).to_csv(
+            restricted / f"sex_follow_up_{sa.name}_{sb.name}.tsv", sep="\t", index=False)
+    return rows
 
 
 def check_identity(specs: List[Dict[str, Any]], output: Path) -> Dict[str, pd.DataFrame]:
@@ -1185,7 +1226,7 @@ def check_identity(specs: List[Dict[str, Any]], output: Path) -> Dict[str, pd.Da
         logger.info(f"{sa.name} vs {sb.name}: {len(keys)} donors in both")
         if len(keys) < specs[0]["min_donors_per_group"]:
             continue
-        for row in _metadata_pair(a.loc[keys], b.loc[keys]):
+        for row in _metadata_pair(a.loc[keys], b.loc[keys]) + _sex_expression_pair(sa, sb, keys, restricted):
             meta_rows.append({"dataset_a": sa.name, "dataset_b": sb.name, "n_shared": len(keys), **row})
         rows = _identity_pair(sa, sb, keys, specs[0], restricted)
         expr_rows += [{"dataset_a": sa.name, "dataset_b": sb.name, **r} for r in rows]

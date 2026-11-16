@@ -146,9 +146,14 @@ def test_metadata_and_identity(setup):
     agreement = pd.read_csv(tmp_path / "qc_a" / "metadata_agreement.tsv", sep="\t").iloc[0]
     assert agreement["n_both"] == N_DONORS and agreement["n_agree"] == N_DONORS - 1
     data_qc.run_check("sex-de", specs)
+    data_qc.run_check("sex", specs)
     out = data_qc.run_check("identity", specs, output=tmp_path / "identity")
     meta = pd.read_csv(out / "identity_metadata.tsv", sep="\t").set_index("covariate")
     assert meta.loc["sex_recorded", "n_agree"] == N_DONORS
+    assert meta.loc["sex_expression", "n_agree"] == N_DONORS
+    # The swapped donor's record is wrong in both datasets, so neither backs it
+    assert meta.loc["sex_expression_off_in_a", "n_both"] == 1
+    assert meta.loc["sex_expression_off_in_a", "n_agree"] == 0
     expr = pd.read_csv(out / "identity_expression.tsv", sep="\t").set_index("celltype")
     assert expr.loc["combined", "pct_own_best_a_to_b"] == 100
     data_qc.run_check("sex-de-compare", specs, output=tmp_path / "compare")
