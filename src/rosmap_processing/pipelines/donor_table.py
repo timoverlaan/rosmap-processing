@@ -390,6 +390,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("spec", help="YAML spec, e.g. config/donor_table.yaml")
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing donor table")
     args = parser.parse_args(argv)
+    from ..utils.logging import setup_logging
+
+    setup_logging(level="INFO")
     run_donor_table(args.spec, overwrite=args.overwrite)
 
 

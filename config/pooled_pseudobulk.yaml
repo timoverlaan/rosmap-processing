@@ -1,0 +1,84 @@
+# Pooled pseudobulk over the five v2 datasets, with the dataset as a covariate
+# (pipelines/pooled_pseudobulk.py). Needs the donor table first:
+#   sbatch slurm/donor_table.sh
+#   sbatch slurm/pooled_pseudobulk.sh            # [--overwrite | --rebuild]
+# Genes: every Ensembl ID that all five count files have (via the gene maps).
+# Broad cell types as in config/batch_effects/; ROSMAP-MIT's counts have no
+# vascular class, so Vasc pools the other four datasets.
+output_dir: data/v2/pooled_pseudobulk
+donor_table: data/v2/donors/donor_table.tsv
+min_cells: 10          # nuclei per donor x cell type for a sample
+min_cpm: 1.0           # genes: mean CPM at least this in every dataset
+min_pairs: 5           # persons in both datasets for the replicate metrics
+# Kept by the 'regress' correction: their mean differences between datasets
+# are biology, not protocol
+protect: [sex, age_capped, dementia]
+disease: dementia
+disease_positive: "yes"
+disease_adjust: [sex, age_capped]
+
+datasets:
+  rosmap_mit:
+    counts: data/v2/counts/ROSMAP_MIT/combined.h5ad
+    gene_map: data/v2/reference/rosmap_mit_gene_map.tsv
+    donor: projid
+    celltype:
+      - {column: source_file, match: "Excitatory", label: Exc}
+      - {column: source_file, match: "Inhibitory", label: Inh}
+      - {column: source_file, match: "Astrocytes", label: Ast}
+      - {column: source_file, match: "Oligodendrocytes", label: Oli}
+      - {column: source_file, match: "OPCs", label: OPC}
+      # Microglia only: the immune file also holds T cells and CAMs
+      - {column: cell_type_high_resolution, match: "^Mic", label: Mic}
+  rosmap_green:
+    counts: data/v2/counts/ROSMAP/combined.h5ad
+    gene_map: data/v2/reference/rosmap_green_gene_map.tsv
+    donor: individualID
+    celltype:
+      - {column: source_file, match: "cux2", label: Exc}
+      - {column: source_file, match: "/inhibitory", label: Inh}
+      - {column: source_file, match: "/astrocytes", label: Ast}
+      - {column: state, match: "^OPC", label: OPC}
+      - {column: subset, match: "OPC|precursor", label: OPC}
+      - {column: source_file, match: "oligodendroglia", label: Oli}
+      - {column: source_file, match: "microglia", label: Mic}
+      - {column: source_file, match: "vascular", label: Vasc}
+  seaad:
+    counts:
+      - data/v2/counts/SeaAD/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad
+      - data/seaAD/PFC/RNAseq/SEAAD_A9_RNAseq_final-nuclei.2024-02-13.h5ad
+    layer: UMIs
+    gene_map: data/v2/reference/seaad_gene_map.tsv
+    donor: Donor ID
+    celltype:
+      - {column: Subclass, match: "^L[0-9]", label: Exc}
+      - {column: Subclass, match: "^(Lamp5|Pax6|Sncg|Vip|Pvalb|Sst|Chandelier)", label: Inh}
+      - {column: Subclass, match: "^Astro", label: Ast}
+      - {column: Subclass, match: "^Oligo", label: Oli}
+      - {column: Subclass, match: "^OPC", label: OPC}
+      - {column: Subclass, match: "^Micro", label: Mic}
+      - {column: Subclass, match: "^(Endo|VLMC)", label: Vasc}
+  diverse_cohorts:
+    counts: data/v2/counts/DiverseCohorts/combined.h5ad
+    gene_map: data/v2/reference/diverse_cohorts_gene_map.tsv
+    donor: individualID
+    celltype:
+      - {column: broadcellclass, match: "^Glut", label: Exc}
+      - {column: broadcellclass, match: "^Gaba", label: Inh}
+      - {column: broadcellclass, match: "^Astro", label: Ast}
+      - {column: broadcellclass, match: "^Olig", label: Oli}
+      - {column: broadcellclass, match: "^Opc", label: OPC}
+      - {column: broadcellclass, match: "^Micro", label: Mic}
+      - {column: broadcellclass, match: "^Endo", label: Vasc}
+  psychad:
+    counts: data/v2/counts/PsychAD/combined.h5ad
+    gene_map: data/v2/reference/psychad_gene_map.tsv
+    donor: individualID
+    celltype:
+      - {column: class, match: "^EN$", label: Exc}
+      - {column: class, match: "^IN$", label: Inh}
+      - {column: class, match: "^Astro$", label: Ast}
+      - {column: class, match: "^Oligo$", label: Oli}
+      - {column: class, match: "^OPC$", label: OPC}
+      - {column: subclass, match: "^Micro$", label: Mic}
+      - {column: class, match: "^(Endo|Mural)$", label: Vasc}
