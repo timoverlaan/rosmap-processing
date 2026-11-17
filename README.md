@@ -57,7 +57,7 @@ data/v2/batch_effects/        obs column summaries and batch-effect tables (aggr
 data/v2/qc/<dataset>/         data QC tables (aggregates); restricted/ holds the per-cell scan
 data/v2/qc/{identity,sex-de-compare}/  data QC across datasets
 data/v2/donors/               global donor table (restricted) + overlap, summary, conflicts (aggregates)
-data/v2/pooled_pseudobulk/    pooled pseudobulk.h5ad (restricted) + correction and disease tables (aggregates)
+data/v2/pooled_pseudobulk/    pooled pseudobulk.h5ad (restricted) + correction and disease tables (aggregates), umap/
 ```
 
 Processed datasets:
@@ -86,7 +86,8 @@ PsychAD only 6 and 4, and the two share 87 with each other. Over all five,
 2,385 persons, 409 of them in two or more datasets; `pipeline donor-table`
 links them (one row per person, harmonized covariates) and `pipeline
 pooled-pseudobulk` pools them per broad cell type, using the persons measured
-twice to check the dataset corrections.
+twice to check the dataset corrections. PsychAD pools three brain banks, so
+its batch is dataset x brain bank.
 
 ## Running on DAIC
 

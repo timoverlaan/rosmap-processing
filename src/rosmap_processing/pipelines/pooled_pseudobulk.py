@@ -11,21 +11,27 @@ persons and holds the harmonized covariates.
 2. pseudobulk.h5ad: one row per dataset x donor x cell type (X = summed
    counts; obs = dataset, donor, person, cell type, nuclei, library size and
    the donor table's covariates). Restricted: stays on the cluster.
-3. Per broad cell type, on the samples with at least min_cells nuclei and
+3. The batch of a sample is its dataset, or, for the datasets in
+   batch_split, the dataset and a donor table column (PsychAD: dataset x
+   brain bank).
+4. Per broad cell type, on the samples with at least min_cells nuclei and
    the genes with a mean CPM of at least min_cpm in every dataset, log2-CPM
-   and four ways to remove the dataset effect:
+   and these ways to remove the batch effect:
      none     as measured
-     center   each dataset's mean per gene removed
-     regress  per gene, a model of dataset + the `protect` covariates (sex,
-              age, dementia); only the dataset terms are removed, so mean
+     center   each batch's mean per gene removed
+     regress  per gene, a model of batch + the `protect` covariates (sex,
+              age, dementia); only the batch terms are removed, so mean
               differences that the covariates explain are kept
-     anchor   per gene, the dataset offsets that best explain the differences
-              between the same persons measured in two datasets (purely
-              technical); datasets without such persons are centered
+     regress_dataset  (only with batch_split) regress with the dataset as
+              the batch, for comparison
+     anchor   per gene, the batch offsets that best explain the differences
+              between the same persons measured in two batches (purely
+              technical); batches without such persons are centered
    and how each does:
-     dataset mixing   share of the PC variance that the dataset explains
-                      (pc_regression) and the balanced accuracy of a dataset
-                      classifier
+     mixing           share of the PC variance that the dataset, the batch,
+                      and within a split dataset its split column explain
+                      (pc_r2), and the balanced accuracy of a classifier of
+                      each (classifier_accuracy)
      replicates       for persons measured in two datasets: how often their
                       profile in one dataset is the closest (Pearson, over
                       genes, of the deviation from the pooled mean) to their
@@ -37,16 +43,20 @@ persons and holds the harmonized covariates.
                       estimated without their pairs (n_folds folds)
      disease          the reference model: one sample per person (the one
                       with the most nuclei), log2-CPM ~ disease + adjust +
-                      dataset (de_pooled.tsv); per dataset alone; and per
-                      correction without the dataset term. Share of genes at
-                      FDR < 0.05 and the correlation of the t statistics with
-                      the reference model's
-     offsets          per dataset, the size of each method's offsets and
-                      how the center and regress offsets correlate with the
+                      batch (de_pooled.tsv); per dataset alone (with its
+                      batches); and per correction without the batch term.
+                      Share of genes at FDR < 0.05 and the correlation of the
+                      t statistics with the reference model's
+     offsets          per batch, the size of each method's offsets and how
+                      the center and regress offsets correlate with the
                       anchor (technical) ones
+5. With umap: true, per cell type a UMAP of the PCs of each of umap_methods,
+   coloured by batch, dementia, sex and age, and with the same person's
+   samples in two datasets joined by a line (umap/<cell type>.png), and all
+   cell types coloured by batch (umap/overview.png). No donor IDs.
 
 Aggregate outputs in output_dir: samples.tsv, genes.tsv, metrics.tsv,
-disease.tsv, de_pooled.tsv (per gene), offsets.tsv, provenance.json.
+disease.tsv, de_pooled.tsv (per gene), offsets.tsv, umap/, provenance.json.
 
 Run: python -m rosmap_processing.pipelines.pooled_pseudobulk config/pooled_pseudobulk.yaml
 """
@@ -68,6 +78,7 @@ from ..utils.constants import DEFAULT_PCA_COMPONENTS, MIN_GENES_PER_CELL
 from ..utils.logging import get_logger
 from ..utils.provenance import provenance_record
 from .batch_effects import _columns_for, _pca, prepare_dataset, stream_counts
+from .umap_plots import CATEGORICAL, INK, MISSING_COLOR, OTHER_COLOR, SEQUENTIAL, UMAP_MIN_DIST
 
 logger = get_logger(__name__)
 
@@ -84,10 +95,14 @@ DEFAULTS: Dict[str, Any] = {
     "disease": "dementia",
     "disease_positive": "yes",
     "disease_adjust": ["sex", "age_capped"],
+    "batch_split": {},       # dataset -> donor table column that splits its batch
+    "umap": True,
+    "umap_methods": ["none", "regress_dataset", "regress"],
+    "umap_neighbors": 15,
 }
 REQUIRED = ("output_dir", "donor_table", "datasets")
 DATASET_KEYS = {"counts", "layer", "gene_map", "donor", "celltype"}
-METHODS = ("none", "center", "regress", "anchor")
+METHODS = ("none", "center", "regress", "regress_dataset", "anchor")
 # Donor table columns copied to the samples (if present)
 COVARIATES = ["n_datasets", "cohort", "brain_bank", "sex", "age_death", "age_capped", "race", "hispanic",
               "pmi", "apoe4", "cogdx", "dementia", "cdr", "braak", "cerad", "thal", "adnc", "crossdis_dx"]
@@ -120,6 +135,14 @@ def load_spec(path: Union[str, Path]) -> Dict[str, Any]:
         bad = [c for c in spec[key] if c not in COVARIATES]
         if bad:
             raise ValueError(f"{key}: {bad} are not donor table covariates ({COVARIATES})")
+    for name, column in (spec["batch_split"] or {}).items():
+        if name not in spec["datasets"]:
+            raise ValueError(f"batch_split: {name} is not one of the datasets")
+        if column not in COVARIATES:
+            raise ValueError(f"batch_split: {column} is not a donor table covariate ({COVARIATES})")
+    bad = [m for m in spec["umap_methods"] if m not in METHODS]
+    if bad:
+        raise ValueError(f"umap_methods: {bad} are not methods ({METHODS})")
     return spec
 
 
@@ -183,6 +206,19 @@ def attach_persons(groups: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
     out = pd.concat(parts).sort_index()
     covs = table.set_index("person_id")[[c for c in COVARIATES if c in table.columns]]
     return out.join(covs, on="person_id")
+
+
+def assign_batches(obs: pd.DataFrame, split: Dict[str, str]) -> np.ndarray:
+    """The dataset per sample, or 'dataset:level' for the datasets split by a
+    column ('dataset:unknown' where it has no value)."""
+    batch = obs["dataset"].astype(str).to_numpy(dtype=object)
+    for name, column in (split or {}).items():
+        if column not in obs.columns:
+            raise ValueError(f"batch_split: the samples have no column {column}; rebuild pseudobulk.h5ad")
+        rows = (obs["dataset"] == name).to_numpy()
+        level = obs.loc[rows, column].astype(object)
+        batch[rows] = (name + ":" + level.where(level.notna(), "unknown").astype(str)).to_numpy()
+    return batch
 
 
 # ---------------------------------------------------------------- corrections
@@ -366,13 +402,13 @@ def _ols(Y: np.ndarray, X: np.ndarray, column: int) -> Tuple[np.ndarray, np.ndar
 
 
 def _disease_design(frame: pd.DataFrame, disease: str, positive: str, adjust: List[str],
-                    with_dataset: bool) -> np.ndarray:
+                    with_batch: bool) -> np.ndarray:
     blocks = [np.ones((len(frame), 1)), (frame[disease].astype(str) == positive).to_numpy(np.float64)[:, None]]
     if adjust:
         C, _ = bm.design_matrix(frame[adjust].reset_index(drop=True), [c for c in adjust if c in NUMERIC])
         blocks.append(C[:, 1:])
-    if with_dataset:
-        blocks.append(pd.get_dummies(frame["dataset"].astype(str), drop_first=True).to_numpy(np.float64))
+    if with_batch:
+        blocks.append(pd.get_dummies(frame["batch"].astype(str), drop_first=True).to_numpy(np.float64))
     return np.hstack(blocks)
 
 
@@ -391,7 +427,7 @@ def disease_analysis(celltype: str, corrected: Dict[str, np.ndarray], sub: pd.Da
         return [], pd.DataFrame()
 
     rows: List[Dict[str, Any]] = []
-    X = _disease_design(frame, disease, positive, adjust, with_dataset=True)
+    X = _disease_design(frame, disease, positive, adjust, with_batch=True)
     beta, t_ref, p = _ols(corrected["none"][first], X, 1)
     fdr = bm.bh_fdr(p)
     de = genes.assign(celltype=celltype, log2fc=beta, t=t_ref, p_value=p, fdr=fdr, n_persons=len(frame),
@@ -404,62 +440,93 @@ def disease_analysis(celltype: str, corrected: Dict[str, np.ndarray], sub: pd.Da
                     n_genes_fdr05=int((bm.bh_fdr(pvals) < 0.05).sum()), n_genes=len(t),
                     t_correlation_with_pooled=corr, n_persons=n, n_positive=npos)
 
-    rows.append(summary("pooled: dataset as covariate", t_ref, p, len(frame), n_pos))
+    rows.append(summary("pooled: batch as covariate", t_ref, p, len(frame), n_pos))
+    Xm = _disease_design(frame, disease, positive, adjust, with_batch=False)
     for method, Yc in corrected.items():
-        Xm = _disease_design(frame, disease, positive, adjust, with_dataset=False)
         _, t, pv = _ols(Yc[first], Xm, 1)
-        rows.append(summary(f"pooled: {method}, no dataset term", t, pv, len(frame), n_pos))
+        rows.append(summary(f"pooled: {method}, no batch term", t, pv, len(frame), n_pos))
     for name in dict.fromkeys(sub["dataset"]):
         sel = np.flatnonzero(usable & (sub["dataset"] == name).to_numpy())
         f = sub.iloc[sel]
         npos = int((f[disease].astype(str) == positive).sum())
         if npos < 3 or len(f) - npos < 3:
             continue
-        _, t, pv = _ols(corrected["none"][sel], _disease_design(f, disease, positive, adjust, False), 1)
+        Xd = _disease_design(f, disease, positive, adjust, with_batch=f["batch"].nunique() > 1)
+        _, t, pv = _ols(corrected["none"][sel], Xd, 1)
         rows.append(summary(f"{name} alone", t, pv, len(f), npos))
     return rows, de
 
 
+def _mixing_labels(ds: np.ndarray, batch: np.ndarray,
+                   split: Dict[str, str]) -> List[Tuple[str, np.ndarray, Optional[np.ndarray]]]:
+    """(label, values, rows or None for all) for the mixing metrics: the
+    dataset; with split batches also the batch, and the split column within
+    each split dataset."""
+    out = [("dataset", ds, None)]
+    if (batch != ds).any():
+        out.append(("batch", batch, None))
+        for name, column in (split or {}).items():
+            rows = np.flatnonzero(ds == name)
+            if len(np.unique(batch[rows])) > 1:
+                out.append((f"{column} within {name}", batch[rows], rows))
+    return out
+
+
+def _umap(pcs: np.ndarray, spec) -> np.ndarray:
+    import umap
+
+    n_neighbors = min(int(spec["umap_neighbors"]), len(pcs) - 1)
+    return umap.UMAP(n_neighbors=n_neighbors, min_dist=UMAP_MIN_DIST,
+                     random_state=spec["seed"]).fit_transform(pcs)
+
+
 def analyse_celltype(celltype: str, obs: pd.DataFrame, counts: np.ndarray, genes: pd.DataFrame, spec,
                      rng: np.random.Generator):
-    """metrics, disease, de_pooled and offsets rows for one broad cell type."""
+    """metrics, disease, de_pooled and offsets rows for one broad cell type,
+    and (with umap) its samples and their UMAP coordinates per method."""
     sel = ((obs["celltype"] == celltype) & (obs["n_cells"] >= spec["min_cells"])).to_numpy()
     sub = obs[sel].reset_index(drop=True)
     names = list(dict.fromkeys(sub["dataset"]))
     if len(names) < 2:
         logger.info(f"{celltype}: in fewer than 2 datasets; skipped")
-        return [], [], pd.DataFrame(), []
+        return [], [], pd.DataFrame(), [], None
     C = np.asarray(counts[np.flatnonzero(sel)], dtype=np.float64)
     cpm = C / sub["library_size"].to_numpy()[:, None] * 1e6
     ds = sub["dataset"].to_numpy().astype(str)
+    batch = sub["batch"].to_numpy().astype(str)
     persons = sub["person_id"].to_numpy().astype(str)
     keep = np.all([cpm[ds == d].mean(axis=0) >= spec["min_cpm"] for d in names], axis=0)
     Y = np.log2(cpm[:, keep] + 1)
     genes_t = genes[keep].reset_index(drop=True)
-    logger.info(f"{celltype}: {len(sub)} samples from {len(names)} datasets, {int(keep.sum())} genes "
-                f"(mean CPM >= {spec['min_cpm']} in every dataset)")
+    logger.info(f"{celltype}: {len(sub)} samples from {len(names)} datasets in {len(set(batch))} batches, "
+                f"{int(keep.sum())} genes (mean CPM >= {spec['min_cpm']} in every dataset)")
 
     protect = sub[list(spec["protect"])]
+    numeric = [c for c in spec["protect"] if c in NUMERIC]
     corrected, offsets = {"none": Y}, {}
-    corrected["center"], offsets["center"] = correct_center(Y, ds)
-    corrected["regress"], offsets["regress"] = correct_regress(
-        Y, ds, protect, [c for c in spec["protect"] if c in NUMERIC])
-    corrected["anchor"], offsets["anchor"], anchored = correct_anchor(Y, ds, persons)
-    logger.info(f"{celltype}: anchored datasets {sorted(anchored)}")
+    corrected["center"], offsets["center"] = correct_center(Y, batch)
+    corrected["regress"], offsets["regress"] = correct_regress(Y, batch, protect, numeric)
+    if (batch != ds).any():
+        corrected["regress_dataset"], _ = correct_regress(Y, ds, protect, numeric)
+    corrected["anchor"], offsets["anchor"], anchored = correct_anchor(Y, batch, persons)
+    logger.info(f"{celltype}: anchored batches {sorted(anchored)}")
 
     metrics: List[Dict[str, Any]] = [dict(celltype=celltype, method="any", metric="n_genes", label="",
                                           value=int(keep.sum()), chance=np.nan, n=len(sub))]
+    mixing = _mixing_labels(ds, batch, spec["batch_split"])
+    all_pcs = {}
     for method, Yc in corrected.items():
-        pcs = _pca(Yc - Yc.mean(axis=0), spec["n_pcs"], spec["seed"])
-        metrics.append(dict(celltype=celltype, method=method, metric="dataset_pc_r2", label="dataset",
-                            value=bm.pc_regression(pcs, ds), chance=np.nan, n=len(sub)))
-        accuracy, chance, n_levels = bm.classify(pcs, ds, rng)
-        metrics.append(dict(celltype=celltype, method=method, metric="dataset_accuracy", label="dataset",
-                            value=accuracy, chance=chance, n=len(sub)))
+        pcs = all_pcs[method] = _pca(Yc - Yc.mean(axis=0), spec["n_pcs"], spec["seed"])
+        for label, values, rows in mixing:
+            p = pcs if rows is None else pcs[rows]
+            base = dict(celltype=celltype, method=method, label=label, n=len(values))
+            metrics.append(dict(base, metric="pc_r2", value=bm.pc_regression(p, values), chance=np.nan))
+            accuracy, chance, _ = bm.classify(p, values, rng)
+            metrics.append(dict(base, metric="classifier_accuracy", value=accuracy, chance=chance))
         if method != "anchor":
             acc = replicate_stats(Yc, ds, persons)
         else:  # cross-fitted: a person's offsets come from the other persons' pairs
-            replicated = sorted({persons[i] for i, _ in _replicate_pairs(persons, ds)})
+            replicated = sorted({persons[i] for i, _ in _replicate_pairs(persons, batch)})
             folds = np.arange(len(replicated)) % spec["n_folds"]
             rng.shuffle(folds)
             acc = {}
@@ -467,7 +534,7 @@ def analyse_celltype(celltype: str, obs: pd.DataFrame, counts: np.ndarray, genes
                 fold = {p for p, f in zip(replicated, folds) if f == k}
                 if not fold:
                     continue
-                Yk, _, _ = correct_anchor(Y, ds, persons, exclude=frozenset(fold))
+                Yk, _, _ = correct_anchor(Y, batch, persons, exclude=frozenset(fold))
                 for key, v in replicate_stats(Yk, ds, persons, queries=fold,
                                               center=corrected["anchor"].mean(axis=0)).items():
                     target = acc.setdefault(key, {k2: [] for k2 in v})
@@ -486,15 +553,199 @@ def analyse_celltype(celltype: str, obs: pd.DataFrame, counts: np.ndarray, genes
     disease_rows, de = disease_analysis(celltype, corrected, sub, genes_t, spec)
 
     offset_rows = []
-    for d in names:
-        row = dict(celltype=celltype, dataset=d, n_samples=int((ds == d).sum()), anchored=d in anchored)
+    dataset_of = dict(zip(batch, ds))
+    for b in dict.fromkeys(batch):
+        row = dict(celltype=celltype, dataset=dataset_of[b], batch=b, n_samples=int((batch == b).sum()),
+                   anchored=b in anchored)
         for method in ("center", "regress", "anchor"):
-            row[f"rms_{method}"] = float(np.sqrt(np.mean(offsets[method][d] ** 2)))
-        if d in anchored:
+            row[f"rms_{method}"] = float(np.sqrt(np.mean(offsets[method][b] ** 2)))
+        if b in anchored:
             for method in ("center", "regress"):
-                row[f"r_{method}_vs_anchor"] = float(np.corrcoef(offsets[method][d], offsets["anchor"][d])[0, 1])
+                row[f"r_{method}_vs_anchor"] = float(np.corrcoef(offsets[method][b], offsets["anchor"][b])[0, 1])
         offset_rows.append(row)
-    return metrics, disease_rows, de, offset_rows
+
+    embedding = None
+    if spec["umap"]:
+        coords = {m: _umap(all_pcs[m], spec) for m in spec["umap_methods"] if m in all_pcs}
+        embedding = (sub, coords)
+    return metrics, disease_rows, de, offset_rows, embedding
+
+
+# ---------------------------------------------------------------- figures
+
+
+def method_titles(split: Dict[str, str]) -> Dict[str, str]:
+    batch = "dataset" + "".join(f" + {column} in {name}" for name, column in (split or {}).items())
+    return {"none": "as measured", "center": f"{batch}: means removed",
+            "regress": f"{batch} regressed out", "regress_dataset": "dataset regressed out",
+            "anchor": f"{batch}: anchored on replicates"}
+
+
+def batch_palette(obs: pd.DataFrame, datasets: Sequence[str]) -> Dict[str, str]:
+    """A fixed colour per batch, in the order of the datasets in the spec
+    (within one, largest batch first); batches beyond the palette are grey."""
+    order = []
+    for name in datasets:
+        part = obs.loc[obs["dataset"] == name, "batch"].astype(str)
+        order += list(part.value_counts().index)
+    return {b: CATEGORICAL[i] if i < len(CATEGORICAL) else OTHER_COLOR for i, b in enumerate(order)}
+
+
+def _batch_label(batch: str) -> str:
+    return batch.replace(":", ": ")
+
+
+def _level_colors(values: pd.Series, levels: Sequence[str]) -> Tuple[np.ndarray, List[Tuple[str, str]]]:
+    """Colours in palette order for the given levels, grey for others and
+    light grey for missing values; the legend counts the samples."""
+    s = values.astype(object)
+    colors = {lv: CATEGORICAL[i] for i, lv in enumerate(levels)}
+    per = s.map(colors).where(s.notna(), MISSING_COLOR).fillna(OTHER_COLOR).to_numpy(dtype=object)
+    legend = [(f"{lv} ({int((s == lv).sum()):,})", colors[lv]) for lv in levels]
+    if s.notna().any() and (~s.isin(levels) & s.notna()).any():
+        legend.append(("other", OTHER_COLOR))
+    if s.isna().any():
+        legend.append((f"missing ({int(s.isna().sum()):,})", MISSING_COLOR))
+    return per, legend
+
+
+def _legend_handles(items):
+    from matplotlib.lines import Line2D
+
+    return [Line2D([], [], marker="o", linestyle="", markersize=6, markerfacecolor=c, markeredgewidth=0,
+                   label=label) for label, c in items]
+
+
+def _clean_axes(ax) -> None:
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+
+def plot_celltype_umaps(celltype: str, sub: pd.DataFrame, coords: Dict[str, np.ndarray],
+                        palette: Dict[str, str], titles: Dict[str, str], mixing: Dict[str, float],
+                        path: Path, seed: int) -> None:
+    """Rows: the methods; columns: batch, dementia, sex, age, and the same
+    person's samples in two datasets joined by a line."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import LineCollection
+
+    n = len(sub)
+    order = np.random.default_rng(seed).permutation(n)
+    size = float(np.clip(1.5e4 / n, 1.0, 8.0))
+    batch = sub["batch"].astype(str).to_numpy()
+    batch_colors = np.array([palette.get(b, OTHER_COLOR) for b in batch], dtype=object)
+    present = [b for b in palette if b in set(batch)]
+    batch_legend = [(f"{_batch_label(b)} ({int((batch == b).sum()):,})", palette[b]) for b in present]
+    dementia_colors, dementia_legend = _level_colors(sub["dementia"], ["no", "yes"])
+    sex_colors, sex_legend = _level_colors(sub["sex"], ["female", "male"])
+    age = pd.to_numeric(sub["age_capped"], errors="coerce").to_numpy(np.float64)
+    pairs = np.array(_replicate_pairs(sub["person_id"].astype(str).to_numpy(), sub["dataset"].astype(str).to_numpy()))
+    linked = np.zeros(n, dtype=bool)
+    if len(pairs):
+        linked[pairs.ravel()] = True
+    cmap = mcolors.LinearSegmentedColormap.from_list("ramp", SEQUENTIAL)
+    lo, hi = (np.nanpercentile(age, [1, 99]) if np.isfinite(age).any() else (0, 1))
+
+    columns = ["batch", "dementia", "sex", "age at death (capped at 90)",
+               f"same person in two datasets ({len(pairs):,} pairs)"]
+    methods = list(coords)
+    fig, axes = plt.subplots(len(methods), len(columns), figsize=(3.5 * len(columns), 3.5 * len(methods) + 1.6),
+                             squeeze=False)
+    fig.patch.set_facecolor("white")
+    for r, method in enumerate(methods):
+        xy = coords[method]
+        last = r == len(methods) - 1
+        for c, column in enumerate(columns):
+            ax = axes[r, c]
+            if c == 0:
+                ax.scatter(*xy[order].T, s=size, c=list(batch_colors[order]), linewidths=0, rasterized=True)
+                if method in mixing:
+                    ax.text(0.02, 0.02, f"batch share of PC variance {mixing[method]:.2f}", transform=ax.transAxes,
+                            fontsize=7, color=INK)
+                if last:
+                    ax.legend(handles=_legend_handles(batch_legend), loc="upper center", bbox_to_anchor=(0.5, -0.02),
+                              ncol=1, fontsize=7, frameon=False, handletextpad=0.2, labelcolor=INK)
+            elif c in (1, 2):
+                colors, legend = (dementia_colors, dementia_legend) if c == 1 else (sex_colors, sex_legend)
+                missing = (colors == MISSING_COLOR)
+                draw = np.concatenate([order[missing[order]], order[~missing[order]]])
+                ax.scatter(*xy[draw].T, s=size, c=list(colors[draw]), linewidths=0, rasterized=True)
+                if last:
+                    ax.legend(handles=_legend_handles(legend), loc="upper center", bbox_to_anchor=(0.5, -0.02),
+                              ncol=1, fontsize=7, frameon=False, handletextpad=0.2, labelcolor=INK)
+            elif c == 3:
+                ok = np.isfinite(age)
+                ax.scatter(*xy[~ok].T, s=size, c=MISSING_COLOR, linewidths=0, rasterized=True)
+                draw = order[ok[order]]
+                points = ax.scatter(*xy[draw].T, s=size, c=age[draw], cmap=cmap, vmin=lo, vmax=max(hi, lo + 1),
+                                    linewidths=0, rasterized=True)
+                if last:
+                    bar = fig.colorbar(points, ax=ax, orientation="horizontal", fraction=0.05, pad=0.03)
+                    bar.ax.tick_params(labelsize=7, colors=INK)
+                    bar.outline.set_visible(False)
+            else:
+                ax.scatter(*xy[~linked].T, s=size, c=MISSING_COLOR, linewidths=0, rasterized=True)
+                if len(pairs):
+                    ax.add_collection(LineCollection(xy[pairs], colors=INK, linewidths=0.4, alpha=0.35))
+                    ax.scatter(*xy[linked].T, s=size, c=list(batch_colors[linked]), linewidths=0, rasterized=True)
+            if r == 0:
+                ax.set_title(column, fontsize=9, color=INK)
+            if c == 0:
+                ax.set_ylabel(titles.get(method, method), fontsize=9, color=INK)
+            _clean_axes(ax)
+    fig.suptitle(f"{celltype}: pseudobulk UMAP, {n:,} samples (dataset x donor), "
+                 f"{sub['person_id'].nunique():,} persons", fontsize=11, color=INK)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.savefig(path, dpi=150, facecolor="white")
+    plt.close(fig)
+
+
+def plot_overview(embeddings: Dict[str, Tuple[pd.DataFrame, Dict[str, np.ndarray]]], palette: Dict[str, str],
+                  titles: Dict[str, str], mixing: Dict[Tuple[str, str], float], path: Path, seed: int) -> None:
+    """Columns: the cell types; rows: the methods; coloured by batch."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    celltypes = list(embeddings)
+    methods = list(next(iter(embeddings.values()))[1])
+    fig, axes = plt.subplots(len(methods), len(celltypes),
+                             figsize=(3.0 * len(celltypes), 3.0 * len(methods) + 1.0), squeeze=False)
+    fig.patch.set_facecolor("white")
+    seen = set()
+    for c, celltype in enumerate(celltypes):
+        sub, coords = embeddings[celltype]
+        batch = sub["batch"].astype(str).to_numpy()
+        seen |= set(batch)
+        colors = np.array([palette.get(b, OTHER_COLOR) for b in batch], dtype=object)
+        order = np.random.default_rng(seed).permutation(len(sub))
+        size = float(np.clip(1.5e4 / len(sub), 1.0, 8.0))
+        for r, method in enumerate(methods):
+            ax = axes[r, c]
+            ax.scatter(*coords[method][order].T, s=size * 0.6, c=list(colors[order]), linewidths=0, rasterized=True)
+            if (celltype, method) in mixing:
+                ax.text(0.02, 0.02, f"batch share {mixing[(celltype, method)]:.2f}", transform=ax.transAxes,
+                        fontsize=7, color=INK)
+            if r == 0:
+                ax.set_title(f"{celltype} ({len(sub):,} samples)", fontsize=9, color=INK)
+            if c == 0:
+                ax.set_ylabel(titles.get(method, method), fontsize=9, color=INK)
+            _clean_axes(ax)
+    legend = [(_batch_label(b), col) for b, col in palette.items() if b in seen]
+    fig.legend(handles=_legend_handles(legend), loc="lower center", ncol=len(legend), fontsize=8, frameon=False,
+               handletextpad=0.2, columnspacing=1.2, labelcolor=INK)
+    fig.suptitle("Pooled pseudobulk UMAP per cell type, coloured by batch\n"
+                 "batch share: share of the PC variance that the batch explains", fontsize=10, color=INK)
+    fig.tight_layout(rect=(0, 0.05, 1, 0.95))
+    fig.savefig(path, dpi=150, facecolor="white")
+    plt.close(fig)
 
 
 # ---------------------------------------------------------------- run
@@ -502,9 +753,9 @@ def analyse_celltype(celltype: str, obs: pd.DataFrame, counts: np.ndarray, genes
 
 def _sample_table(obs: pd.DataFrame, min_cells: int) -> pd.DataFrame:
     rows = []
-    for (d, t), part in obs.groupby(["dataset", "celltype"], sort=False):
+    for (d, b, t), part in obs.groupby(["dataset", "batch", "celltype"], sort=False):
         kept = part[part["n_cells"] >= min_cells]
-        rows.append(dict(dataset=d, celltype=t, n_samples=len(part), n_kept=len(kept),
+        rows.append(dict(dataset=d, batch=b, celltype=t, n_samples=len(part), n_kept=len(kept),
                          median_nuclei=float(kept["n_cells"].median()) if len(kept) else np.nan,
                          n_persons_in_other_datasets=int((kept.get("n_datasets", pd.Series(dtype=float)) > 1).sum())))
     return pd.DataFrame(rows)
@@ -562,26 +813,48 @@ def run_pooled_pseudobulk(spec_path: Union[str, Path], overwrite: bool = False, 
         if isinstance(obs[c].dtype, pd.CategoricalDtype):
             obs[c] = obs[c].astype(object).where(obs[c].notna(), np.nan)
     obs = obs.reset_index(drop=True)
+    obs["batch"] = assign_batches(obs, spec["batch_split"])
+    for name in spec["batch_split"] or {}:
+        persons = obs[obs["dataset"] == name].groupby("batch")["person_id"].nunique()
+        logger.info(f"[{name}] persons per batch: {persons.to_dict()}")
     genes = adata.var.reset_index(drop=True)
     counts = adata.X.tocsr() if sp.issparse(adata.X) else sp.csr_matrix(adata.X)
 
     _sample_table(obs, spec["min_cells"]).to_csv(out / "samples.tsv", sep="\t", index=False)
     genes.to_csv(out / "genes.tsv", sep="\t", index=False)
-    metrics, disease, de, offsets = [], [], [], []
+    metrics, disease, de, offsets, embeddings = [], [], [], [], {}
     for celltype in sorted(obs["celltype"].unique()):
         sel = np.flatnonzero((obs["celltype"] == celltype).to_numpy())
-        m, d, g, o = analyse_celltype(celltype, obs.iloc[sel].reset_index(drop=True), counts[sel].toarray(),
-                                      genes, spec, rng)
+        m, d, g, o, e = analyse_celltype(celltype, obs.iloc[sel].reset_index(drop=True), counts[sel].toarray(),
+                                         genes, spec, rng)
         metrics += m
         disease += d
         offsets += o
         if len(g):
             de.append(g)
-    pd.DataFrame(metrics, columns=METRIC_COLUMNS).to_csv(out / "metrics.tsv", sep="\t", index=False)
+        if e is not None:
+            embeddings[celltype] = e
+    metrics = pd.DataFrame(metrics, columns=METRIC_COLUMNS)
+    metrics.to_csv(out / "metrics.tsv", sep="\t", index=False)
     pd.DataFrame(disease).to_csv(out / "disease.tsv", sep="\t", index=False)
     (pd.concat(de, ignore_index=True) if de else pd.DataFrame()).to_csv(out / "de_pooled.tsv", sep="\t",
                                                                           index=False)
     pd.DataFrame(offsets).to_csv(out / "offsets.tsv", sep="\t", index=False)
+
+    if embeddings:
+        figures = out / "umap"
+        figures.mkdir(exist_ok=True)
+        palette = batch_palette(obs, names)
+        titles = method_titles(spec["batch_split"])
+        label = "batch" if (obs["batch"] != obs["dataset"]).any() else "dataset"
+        share = metrics[(metrics["metric"] == "pc_r2") & (metrics["label"] == label)]
+        mixing = {(r.celltype, r.method): float(r.value) for r in share.itertuples()}
+        for celltype, (sub, coords) in embeddings.items():
+            plot_celltype_umaps(celltype, sub, coords, palette, titles,
+                                {m: v for (t, m), v in mixing.items() if t == celltype},
+                                figures / f"{celltype}.png", spec["seed"])
+        plot_overview(embeddings, palette, titles, mixing, figures / "overview.png", spec["seed"])
+        logger.info(f"Wrote the UMAPs to {figures}")
     with open(out / "provenance.json", "w") as f:
         json.dump(provenance_record("pooled_pseudobulk", {"spec": str(spec_path)}) | {"spec": spec}, f,
                   indent=2, default=str)

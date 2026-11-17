@@ -283,20 +283,28 @@ python -m rosmap_processing pipeline pooled-pseudobulk config/pooled_pseudobulk.
 Pseudobulk sums per dataset x donor x broad cell type over the Ensembl IDs
 every count file has, after the cell filters of `pipeline batch-effects`,
 linked to persons and covariates through the donor table
-(`pseudobulk.h5ad`, restricted). Per cell type, on log2-CPM of the genes with
-a mean CPM of at least `min_cpm` in every dataset, it compares four ways to
-remove the dataset effect: none, centering each dataset, regression on dataset
-+ `protect` covariates removing only the dataset terms, and offsets anchored
-on persons measured in two datasets (purely technical; datasets without such
-persons are centered on the anchored ones). Each is scored on dataset mixing
-(PC regression, classifier accuracy), on the replicates (is a person's profile
-in one dataset closest to their own in the other; cross-fitted for the
-anchored offsets) and on the disease signal: the reference model has one
-sample per person and the dataset as a covariate (`de_pooled.tsv`, per gene),
-compared with each dataset alone and each correction without a dataset term.
-`offsets.tsv` compares the centering and regression offsets with the anchored
-ones. `--overwrite` reruns the analyses on the existing pseudobulk;
-`--rebuild` also re-reads the count files.
+(`pseudobulk.h5ad`, restricted). The batch is the dataset, except for the
+datasets in `batch_split`, which are split by a donor table column (PsychAD by
+brain bank). Per cell type, on log2-CPM of the genes with a mean CPM of at
+least `min_cpm` in every dataset, it compares ways to remove the batch effect:
+none, centering each batch, regression on batch + `protect` covariates
+removing only the batch terms, the same with the dataset as the batch
+(`regress_dataset`, only with `batch_split`, for comparison), and offsets
+anchored on persons measured in two batches (purely technical; batches
+without such persons are centered on the anchored ones). Each is scored on
+mixing (`pc_r2`: share of the PC variance that the dataset, the batch, or the
+split column within its dataset explains; `classifier_accuracy`), on the
+replicates (is a person's profile in one dataset closest to their own in the
+other; cross-fitted for the anchored offsets) and on the disease signal: the
+reference model has one sample per person and the batch as a covariate
+(`de_pooled.tsv`, per gene), compared with each dataset alone (with its
+batches) and each correction without a batch term. `offsets.tsv` compares the
+centering and regression offsets with the anchored ones, per batch. With
+`umap: true`, `umap/<cell type>.png` shows a UMAP of the PCs after each of
+`umap_methods` (rows), coloured by batch, dementia, sex and age, with the same
+person's samples in two datasets joined by a line; `umap/overview.png` shows
+all cell types coloured by batch. `--overwrite` reruns the analyses on the
+existing pseudobulk; `--rebuild` also re-reads the count files.
 
 ### `pipeline umap`
 ```bash

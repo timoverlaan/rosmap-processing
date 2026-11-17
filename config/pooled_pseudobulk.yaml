@@ -1,4 +1,5 @@
-# Pooled pseudobulk over the five v2 datasets, with the dataset as a covariate
+# Pooled pseudobulk over the five v2 datasets, with the batch (dataset; PsychAD x
+# brain bank) as a covariate
 # (pipelines/pooled_pseudobulk.py). Needs the donor table first:
 #   sbatch slurm/donor_table.sh
 #   sbatch slurm/pooled_pseudobulk.sh            # [--overwrite | --rebuild]
@@ -16,6 +17,12 @@ protect: [sex, age_capped, dementia]
 disease: dementia
 disease_positive: "yes"
 disease_adjust: [sex, age_capped]
+# PsychAD pools three brain banks (Rush, Mount Sinai, NIMH HBCC); its batch is
+# dataset x brain bank (the donor table's brain_bank)
+batch_split:
+  psychad: brain_bank
+umap: true
+umap_methods: [none, regress_dataset, regress]   # rows of umap/<cell type>.png
 
 datasets:
   rosmap_mit:
