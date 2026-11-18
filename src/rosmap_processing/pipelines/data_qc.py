@@ -1309,10 +1309,10 @@ def _genotype_layers(scan: Scan, gene_cols: np.ndarray, spec: Dict[str, Any]):
         if not len(rows):
             continue
         counts = scan.pseudobulk_rows(rows)
-        donors = g["donor"].to_numpy()[rows]
-        np.add.at(total, donors, counts)
+        donors = g["donor"].to_numpy()[rows]  # one row per donor in a cell type
+        total[donors] += counts
         n_cells = g["n_cells"].to_numpy()[rows]
-        np.add.at(total_cells, donors, n_cells)
+        total_cells[donors] += n_cells
         if t != OTHER:
             keep = n_cells >= spec["min_cells"]
             layers.append((t, donors[keep], counts[keep]))
