@@ -116,18 +116,19 @@ def build_cells(spec: Dict[str, Any], overwrite: bool = False) -> Path:
         logger.info(f"[{ds.name}] sampled {len(ds.sample)} of {len(ds.cells)} cells "
                     f"(up to {spec['max_cells_per_sample']} per donor x cell type)")
         stream_counts(ds, pooled["chunk_size"])
-        order = np.searchsorted(ds.union, columns[ds.name])
-        blocks.append(ds.counts[:, order].astype(np.float32))
         nuclei = ds.groups.set_index(["donor", "celltype"])["n_cells"]
         part = pd.DataFrame({"dataset": ds.name, "donor": ds.sample["donor"].astype(str).to_numpy(),
                              "celltype": ds.sample["celltype"].to_numpy(), "library_size": ds.totals})
         part["sample_nuclei"] = nuclei.reindex(
             pd.MultiIndex.from_arrays([ds.sample["donor"], ds.sample["celltype"]])).to_numpy()
-        parts.append(part)
+        part = pp.attach_persons(part, table)   # cells of donors in the donor table; index = row
+        order = np.searchsorted(ds.union, columns[ds.name])
+        blocks.append(ds.counts[part.index.to_numpy()][:, order].astype(np.float32))
+        parts.append(part.reset_index(drop=True))
         ds.cells = ds.counts = ds.pseudobulk = None
-    obs = pp.attach_persons(pd.concat(parts, ignore_index=True), table)
-    matrix = sp.vstack(blocks).tocsr()[obs.index.to_numpy()]
-    obs = obs.reset_index(drop=True)
+    obs = pd.concat(parts, ignore_index=True)
+    matrix = sp.vstack(blocks, format="csr")
+    del blocks
     obs["batch"] = pp.assign_batches(obs, pooled["batch_split"])
     obs.index = obs.index.astype(str)
     for c in obs.columns:

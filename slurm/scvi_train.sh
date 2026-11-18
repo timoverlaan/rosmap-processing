@@ -9,7 +9,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=128GB
+#SBATCH --mem=96GB
 #SBATCH --gres=gpu:1
 #SBATCH --mail-type=END
 #SBATCH --output=slurm/out/%j_scvi_train.out
