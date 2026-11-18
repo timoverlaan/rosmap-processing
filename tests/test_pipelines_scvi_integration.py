@@ -3,12 +3,15 @@ datasets of the pooled pseudobulk tests (training needs scvi-tools, which is
 only in the gpu environment; here a stand-in for its decoded expression)."""
 
 import anndata as ad
+import h5py
 import numpy as np
 import pandas as pd
+import pytest
 import scipy.sparse as sp
 import yaml
 
-from rosmap_processing.pipelines.scvi_integration import build_cells, load_spec, sample_cells, score_samples
+from rosmap_processing.pipelines.scvi_integration import (CSRWriter, build_cells, load_spec, read_hvg_cells,
+                                                          sample_cells, score_samples, write_h5ad_rest)
 from .test_pipelines_pooled_pseudobulk import N_GENES, PERSONS, _setup
 
 
@@ -26,6 +29,47 @@ def test_sample_cells_caps_each_sample():
     out = sample_cells(cells, 8, np.random.default_rng(0))
     assert out.groupby(["donor", "celltype"]).size().max() == 8
     assert (np.diff(out["row"]) > 0).all()   # file order
+
+
+def test_csr_writer_round_trip(tmp_path):
+    rng = np.random.default_rng(0)
+    blocks = [sp.random(n, 9, density=0.3, format="csr", random_state=rng, data_rvs=lambda k: rng.integers(1, 9, k))
+              for n in (5, 0, 7, 3)]
+    obs = pd.DataFrame({"dataset": pd.Categorical(["a"] * 8 + ["b"] * 7)}, index=[str(i) for i in range(15)])
+    var = pd.DataFrame({"gene_id": [f"G{i}" for i in range(9)]}, index=[f"G{i}" for i in range(9)])
+    path = tmp_path / "x.h5ad"
+    with h5py.File(path, "w") as f:
+        writer = CSRWriter(f, 9, chunk=4)
+        for b in blocks:
+            writer.append(b)
+        write_h5ad_rest(f, obs, var, {"note": "test"})
+    back = ad.read_h5ad(path)
+    assert back.shape == (15, 9) and back.X.dtype == np.float32
+    assert (back.X != sp.vstack(blocks)).nnz == 0
+    assert list(back.obs["dataset"]) == list(obs["dataset"]) and back.uns["note"] == "test"
+    backed = ad.read_h5ad(path, backed="r")
+    assert (sp.csr_matrix(backed.X[6:12]) != sp.vstack(blocks).tocsr()[6:12]).nnz == 0
+    backed.file.close()
+
+
+def test_hvgs_per_batch_match_scanpy(tmp_path):
+    try:
+        import skmisc.loess  # noqa: F401  (seurat_v3; broken on Windows)
+    except Exception as e:
+        pytest.skip(f"skmisc.loess: {e}")
+    import scanpy as sc
+
+    spec = _spec(tmp_path)
+    path = build_cells(spec)
+    hvg = read_hvg_cells(path, n_top=15, chunk=7)
+    cells = ad.read_h5ad(path)
+    expected = sc.pp.highly_variable_genes(cells, n_top_genes=15, flavor="seurat_v3", batch_key="batch",
+                                           inplace=False)
+    assert list(hvg.var_names) == list(cells.var_names[expected["highly_variable"].to_numpy()])
+    assert hvg.n_obs == cells.n_obs
+    assert (hvg.X != cells[:, hvg.var_names].X).nnz == 0
+    np.testing.assert_allclose(hvg.var["highly_variable_rank"],
+                               expected.loc[expected["highly_variable"], "highly_variable_rank"])
 
 
 def test_cells_and_score_stages(tmp_path):

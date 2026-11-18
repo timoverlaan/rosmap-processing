@@ -10,8 +10,10 @@ Stages:
   cells  (CPU) per dataset, the cell filters and broad cell types of the
          pooled pseudobulk, then up to max_cells_per_sample nuclei per
          dataset x donor x cell type, at random; their counts for the genes
-         every dataset has -> cells.h5ad (restricted: donor IDs)
-  train  (GPU) seurat_v3 HVGs over the batches; scVI with the batch (the
+         every dataset has -> cells.h5ad (restricted: donor IDs), written
+         one row chunk at a time (all genes of all cells do not fit in memory)
+  train  (GPU) seurat_v3 HVGs over the batches, as scanpy's batch_key
+         version but reading one batch at a time; scVI with the batch (the
          dataset; PsychAD x brain bank) as batch_key; scANVI from it with the
          broad cell types as labels. Per model, each cell's decoded
          expression averaged over all batches, and its latent position,
@@ -32,19 +34,27 @@ Run: python -m rosmap_processing pipeline scvi-integration config/scvi_integrati
 """
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+import h5py
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 import yaml
 
 from ..core import batch_metrics as bm
+from ..utils.counts import count_non_integer_values, total_counts
 from ..utils.logging import get_logger
 from ..utils.provenance import provenance_record
 from . import pooled_pseudobulk as pp
-from .batch_effects import prepare_dataset, stream_counts
+from .batch_effects import _matrix_node, prepare_dataset
+
+try:
+    from anndata.io import sparse_dataset, write_elem
+except ImportError:  # anndata < 0.11
+    from anndata.experimental import sparse_dataset, write_elem
 
 logger = get_logger(__name__)
 
@@ -59,6 +69,7 @@ DEFAULTS: Dict[str, Any] = {
     "scanvi_epochs": 10,
     "batch_size": 1024,
     "decode_chunk": 20000,
+    "read_chunk": 200000,
     "umap_methods": ["none", "regress", "scvi", "scanvi"],
 }
 REQUIRED = ("pooled_spec", "output_dir")
@@ -93,9 +104,76 @@ def sample_cells(cells: pd.DataFrame, max_per_sample: int, rng: np.random.Genera
     return shuffled[rank < max_per_sample].sort_values("row").reset_index(drop=True)
 
 
-def build_cells(spec: Dict[str, Any], overwrite: bool = False) -> Path:
-    import anndata as ad
+class CSRWriter:
+    """X of a new h5ad file, appended in row blocks (float32 data, int32
+    indices, int64 indptr), so the whole matrix is never in memory."""
 
+    def __init__(self, f: h5py.File, n_vars: int, chunk: int = 1 << 20):
+        self.group = f.create_group("X")
+        self.group.attrs["encoding-type"] = "csr_matrix"
+        self.group.attrs["encoding-version"] = "0.1.0"
+        opts = dict(chunks=(chunk,), maxshape=(None,), compression="gzip", compression_opts=1)
+        self.data = self.group.create_dataset("data", shape=(0,), dtype=np.float32, **opts)
+        self.indices = self.group.create_dataset("indices", shape=(0,), dtype=np.int32, **opts)
+        self.indptr = self.group.create_dataset("indptr", data=np.zeros(1, dtype=np.int64), **opts)
+        self.n_obs, self.n_vars = 0, n_vars
+        self.group.attrs["shape"] = (0, n_vars)
+
+    def append(self, block) -> None:
+        block = sp.csr_matrix(block, dtype=np.float32)
+        if block.shape[1] != self.n_vars:
+            raise ValueError(f"block has {block.shape[1]} columns, not {self.n_vars}")
+        block.sort_indices()
+        nnz, rows = self.data.shape[0], self.indptr.shape[0]
+        self.data.resize((nnz + block.nnz,))
+        self.data[nnz:] = block.data
+        self.indices.resize((nnz + block.nnz,))
+        self.indices[nnz:] = block.indices.astype(np.int32)
+        self.indptr.resize((rows + block.shape[0],))
+        self.indptr[rows:] = block.indptr[1:].astype(np.int64) + nnz
+        self.n_obs += block.shape[0]
+        self.group.attrs["shape"] = (self.n_obs, self.n_vars)
+
+
+def write_h5ad_rest(f: h5py.File, obs: pd.DataFrame, var: pd.DataFrame, uns: Dict[str, Any]) -> None:
+    """Everything but X, to a file whose X a CSRWriter wrote."""
+    if len(obs) != f["X"].attrs["shape"][0] or len(var) != f["X"].attrs["shape"][1]:
+        raise ValueError("obs and var do not match X")
+    f.attrs["encoding-type"] = "anndata"
+    f.attrs["encoding-version"] = "0.1.0"
+    write_elem(f, "obs", obs)
+    write_elem(f, "var", var)
+    write_elem(f, "uns", uns)
+    for key in ("layers", "obsm", "obsp", "varm", "varp"):
+        write_elem(f, key, {})
+
+
+def stream_sample(ds, rows: np.ndarray, columns: np.ndarray, chunk_size: int, writer: CSRWriter) -> np.ndarray:
+    """The counts of the given file rows (sorted) for the given file columns
+    (in their order), appended to writer one row chunk at a time; returns the
+    rows' totals over all genes."""
+    totals = np.zeros(len(rows))
+    start_time = time.time()
+    with h5py.File(ds.path, "r") as f:
+        matrix = sparse_dataset(_matrix_node(f, ds.cfg.get("layer")))
+        n_obs = matrix.shape[0]
+        for start in range(0, n_obs, chunk_size):
+            stop = min(start + chunk_size, n_obs)
+            lo, hi = np.searchsorted(rows, [start, stop])
+            if lo == hi:
+                continue
+            block = sp.csr_matrix(matrix[start:stop])[rows[lo:hi] - start]
+            bad = count_non_integer_values(block)
+            if bad:
+                raise ValueError(f"[{ds.name}] rows {start}-{stop}: {bad} values are not counts")
+            totals[lo:hi] = total_counts(block)
+            writer.append(block[:, columns])
+            if (start // chunk_size) % 20 == 0:
+                logger.info(f"[{ds.name}] read {stop}/{n_obs} rows ({time.time() - start_time:.0f} s)")
+    return totals
+
+
+def build_cells(spec: Dict[str, Any], overwrite: bool = False) -> Path:
     pooled = spec["pooled"]
     out = Path(spec["output_dir"])
     path = out / "cells.h5ad"
@@ -109,43 +187,111 @@ def build_cells(spec: Dict[str, Any], overwrite: bool = False) -> Path:
     datasets = [prepare_dataset(k, {**cfg, "batch": [], "covariates": {}}, settings)
                 for k, cfg in pooled["datasets"].items()]
     gene_ids, columns = pp.shared_genes(datasets)
-    blocks, parts = [], []
-    for ds in datasets:
-        ds.sample = sample_cells(ds.cells, spec["max_cells_per_sample"], rng)
-        ds.union = np.unique(columns[ds.name])
-        logger.info(f"[{ds.name}] sampled {len(ds.sample)} of {len(ds.cells)} cells "
-                    f"(up to {spec['max_cells_per_sample']} per donor x cell type)")
-        stream_counts(ds, pooled["chunk_size"])
-        nuclei = ds.groups.set_index(["donor", "celltype"])["n_cells"]
-        part = pd.DataFrame({"dataset": ds.name, "donor": ds.sample["donor"].astype(str).to_numpy(),
-                             "celltype": ds.sample["celltype"].to_numpy(), "library_size": ds.totals})
-        part["sample_nuclei"] = nuclei.reindex(
-            pd.MultiIndex.from_arrays([ds.sample["donor"], ds.sample["celltype"]])).to_numpy()
-        part = pp.attach_persons(part, table)   # cells of donors in the donor table; index = row
-        order = np.searchsorted(ds.union, columns[ds.name])
-        blocks.append(ds.counts[part.index.to_numpy()][:, order].astype(np.float32))
-        parts.append(part.reset_index(drop=True))
-        ds.cells = ds.counts = ds.pseudobulk = None
-    obs = pd.concat(parts, ignore_index=True)
-    matrix = sp.vstack(blocks, format="csr")
-    del blocks
-    obs["batch"] = pp.assign_batches(obs, pooled["batch_split"])
-    obs.index = obs.index.astype(str)
-    for c in obs.columns:
-        if obs[c].dtype == object:
-            obs[c] = obs[c].astype("category")
     var = pd.concat([pd.DataFrame({"gene_id": gene_ids}), pp._symbols(datasets, columns)], axis=1)
     var.index = var["gene_id"].to_numpy()
-    adata = ad.AnnData(matrix, obs=obs, var=var)
-    adata.uns["provenance_scvi_cells"] = provenance_record(
-        "scvi_integration cells", {"spec": spec["name"], "max_cells_per_sample": spec["max_cells_per_sample"]})
-    adata.write_h5ad(path, compression="gzip")
-    logger.info(f"Wrote {path}: {adata.n_obs} cells x {adata.n_vars} genes, "
+    partial = path.with_suffix(".h5ad.partial")
+    parts = []
+    with h5py.File(partial, "w") as f:
+        writer = CSRWriter(f, len(gene_ids))
+        for ds in datasets:
+            sample = sample_cells(ds.cells, spec["max_cells_per_sample"], rng)
+            nuclei = ds.cells.groupby(["donor", "celltype"], sort=False, observed=True).size()
+            part = pd.DataFrame({"dataset": ds.name, "donor": sample["donor"].astype(str).to_numpy(),
+                                 "celltype": sample["celltype"].to_numpy()})
+            part["sample_nuclei"] = nuclei.reindex(
+                pd.MultiIndex.from_arrays([sample["donor"], sample["celltype"]])).to_numpy()
+            part = pp.attach_persons(part, table)   # cells of donors in the donor table; index = row
+            sample = sample.iloc[part.index.to_numpy()]
+            logger.info(f"[{ds.name}] sampled {len(sample)} of {len(ds.cells)} cells (up to "
+                        f"{spec['max_cells_per_sample']} per donor x cell type, donors in the donor table)")
+            part = part.reset_index(drop=True)
+            part["library_size"] = stream_sample(ds, sample["row"].to_numpy(), columns[ds.name],
+                                                 pooled["chunk_size"], writer)
+            parts.append(part)
+            ds.cells = None
+        obs = pd.concat(parts, ignore_index=True)
+        obs["batch"] = pp.assign_batches(obs, pooled["batch_split"])
+        obs.index = obs.index.astype(str)
+        for c in obs.columns:
+            if obs[c].dtype == object:
+                obs[c] = obs[c].astype("category")
+        uns = {"provenance_scvi_cells": provenance_record(
+            "scvi_integration cells", {"spec": spec["name"], "max_cells_per_sample": spec["max_cells_per_sample"]})}
+        write_h5ad_rest(f, obs, var, uns)
+        nnz = writer.data.shape[0]
+    partial.replace(path)
+    logger.info(f"Wrote {path}: {len(obs)} cells x {len(var)} genes ({nnz} stored counts), "
                 f"{obs.groupby(['dataset', 'donor', 'celltype'], observed=True).ngroups} samples")
     return path
 
 
 # ---------------------------------------------------------------- train
+
+
+def _read_rows(X, rows: np.ndarray, chunk: int):
+    """Rows (sorted) of a backed CSR matrix, read in contiguous chunks."""
+    parts = []
+    for start in range(int(rows[0]), int(rows[-1]) + 1, chunk):
+        lo, hi = np.searchsorted(rows, [start, start + chunk])
+        if hi > lo:
+            first, stop = int(rows[lo]), int(rows[hi - 1]) + 1
+            parts.append(sp.csr_matrix(X[first:stop])[rows[lo:hi] - first])
+    return sp.vstack(parts, format="csr")
+
+
+def combine_hvg_ranks(norm_gene_vars: np.ndarray, index: pd.Index, n_top: int) -> pd.DataFrame:
+    """seurat_v3 HVGs from each batch's normalized variances (batches x genes),
+    as scanpy's highly_variable_genes(flavor="seurat_v3", batch_key=...)."""
+    ranked = np.argsort(np.argsort(-norm_gene_vars, axis=1), axis=1).astype(np.float32)
+    nbatches = np.sum((ranked < n_top).astype(int), axis=0)
+    ranked[ranked >= n_top] = np.nan
+    median = np.ma.median(np.ma.masked_invalid(ranked), axis=0).filled(np.nan)
+    df = pd.DataFrame({"highly_variable_nbatches": nbatches, "highly_variable_rank": median,
+                       "variances_norm": np.mean(norm_gene_vars, axis=0)}, index=index)
+    order = df.sort_values(["highly_variable_rank", "highly_variable_nbatches"],
+                           ascending=[True, False], na_position="last").index
+    df["highly_variable"] = False
+    df.loc[order[:int(n_top)], "highly_variable"] = True
+    return df
+
+
+def batch_hvgs(X, var: pd.DataFrame, batch: np.ndarray, n_top: int, chunk: int) -> pd.DataFrame:
+    """seurat_v3 HVGs over the batches of a backed count matrix, reading one
+    batch at a time (scanpy's batch_key version needs the whole matrix)."""
+    import anndata as ad
+    import scanpy as sc
+
+    norm = []
+    for b in np.unique(batch):   # scanpy's order
+        counts = _read_rows(X, np.flatnonzero(batch == b), chunk)
+        stats = sc.pp.highly_variable_genes(ad.AnnData(counts, var=pd.DataFrame(index=var.index)),
+                                            flavor="seurat_v3", n_top_genes=n_top, inplace=False,
+                                            check_values=False)
+        norm.append(stats["variances_norm"].to_numpy())
+        logger.info(f"HVG statistics for batch {b}: {counts.shape[0]} cells")
+        del counts
+    return combine_hvg_ranks(np.vstack(norm), var.index, n_top)
+
+
+def read_hvg_cells(path: Path, n_top: int, chunk: int):
+    """cells.h5ad restricted to its seurat_v3 HVGs over the batches, without
+    loading all of its genes at once."""
+    import anndata as ad
+
+    cells = ad.read_h5ad(path, backed="r")
+    try:
+        logger.info(f"{cells.n_obs} cells x {cells.n_vars} genes")
+        batch = cells.obs["batch"].astype(str).to_numpy()
+        hvg = batch_hvgs(cells.X, cells.var, batch, n_top, chunk)
+        keep = np.flatnonzero(hvg["highly_variable"].to_numpy())
+        parts = [sp.csr_matrix(cells.X[start:min(start + chunk, cells.n_obs)])[:, keep]
+                 for start in range(0, cells.n_obs, chunk)]
+        var = cells.var.iloc[keep].join(hvg.iloc[keep].drop(columns="highly_variable"))
+        adata = ad.AnnData(sp.vstack(parts, format="csr"), obs=cells.obs.copy(), var=var)
+    finally:
+        cells.file.close()
+    logger.info(f"{adata.n_vars} HVGs (seurat_v3 over {len(set(batch))} batches)")
+    return adata
 
 
 def _sample_codes(obs: pd.DataFrame):
@@ -178,7 +324,6 @@ def decode_samples(model, adata, codes: np.ndarray, n_groups: int, chunk: int):
 
 def train_models(spec: Dict[str, Any], overwrite: bool = False) -> Path:
     import anndata as ad
-    import scanpy as sc
     import scvi
     import torch
 
@@ -192,14 +337,9 @@ def train_models(spec: Dict[str, Any], overwrite: bool = False) -> Path:
     logger.info(f"scvi-tools {scvi.__version__}, torch {torch.__version__}, accelerator {accelerator}"
                 + (f" ({torch.cuda.get_device_name(0)})" if accelerator == "gpu" else ""))
 
-    cells = ad.read_h5ad(out / "cells.h5ad")
-    logger.info(f"{cells.n_obs} cells x {cells.n_vars} genes")
-    sc.pp.highly_variable_genes(cells, n_top_genes=spec["n_hvg"], flavor="seurat_v3", batch_key="batch")
-    adata = cells[:, cells.var["highly_variable"].to_numpy()].copy()
-    del cells
+    adata = read_hvg_cells(out / "cells.h5ad", spec["n_hvg"], spec["read_chunk"])
     adata.obs["batch"] = adata.obs["batch"].astype("category")
     adata.obs["celltype"] = adata.obs["celltype"].astype("category")
-    logger.info(f"{adata.n_vars} HVGs (seurat_v3 over {adata.obs['batch'].nunique()} batches)")
 
     scvi.model.SCVI.setup_anndata(adata, batch_key="batch")
     models, histories = {}, []

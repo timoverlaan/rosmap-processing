@@ -8,7 +8,7 @@
 #SBATCH --time=08:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=96GB
+#SBATCH --mem=64GB
 #SBATCH --mail-type=END
 #SBATCH --output=slurm/out/%j_scvi_cells.out
 #SBATCH --error=slurm/out/%j_scvi_cells.out
