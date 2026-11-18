@@ -358,7 +358,8 @@ get an ordered legend rather than a colour bar. Writes `umap_<gene set>.png`, `u
 ```bash
 python -m rosmap_processing pipeline qc-scan config/data_qc/<name>.yaml [--overwrite]
 python -m rosmap_processing pipeline qc-check CHECK config/data_qc/<name>.yaml [...] \
-    [--output DIR] [--mathys2019 data/mathys2019_DEGs.csv]
+    [--output DIR] [--mathys2019 data/mathys2019_DEGs.csv] \
+    [--genotypes DOSAGES.tsv.gz --eqtls data/v2/reference/gtex_cortex_eqtls.tsv [--id-map CLINICAL.csv]]
 ```
 How well a count file was processed. A QC spec names the dataset block of a
 batch-effects spec (count file, gene map, donor, cell types, covariates) and
@@ -381,8 +382,27 @@ per-cell values and pseudobulk sums per donor x cell type to
 | `metadata` | `metadata_agreement.tsv`, `metadata_confusion.tsv`: the `metadata_sources` compared per donor; `metadata_pools.tsv` |
 | `sex-de-compare` | (several specs, `data/v2/qc/sex-de-compare/`) concordance of the sex effects, ranks of known sex genes |
 | `identity` | (several specs, `data/v2/qc/identity/`) donors in two datasets: metadata agreement, and how often a donor's own pseudobulk profile is its best match in the other dataset |
+| `genotype` | (one or more specs, `data/v2/qc/genotype/`) does a donor's expression match the genotype of the person it is labelled as? `genotype_summary.tsv`, `genotype_features.tsv`, `genotype_sex.tsv`, `genotype_cross.tsv`, `genotype_histograms.tsv` |
 
-Donor IDs of sex or identity mismatches go to `restricted/*_follow_up.tsv` for
+The `genotype` check scores every donor against every genotyped sample over
+strong cis-eQTLs, as MixupMapper does (Westra et al. 2011). The eQTLs are the
+independent GTEx v8 cortex eQTLs of the 2,000 strongest eGenes
+(`scripts/gtex_eqtls.py`, public API). `--genotypes` is the dosage of every
+genotyped person at those variants (`scripts/extract_dosages.py`, from
+ROSMAP's imputed Affymetrix 6 dosage files; restricted). A donor's label is
+its match key mapped to a projid through `--id-map`. Features are
+(eQTL, layer): the pooled nuclei of a donor and each cell type, as log-CPM with
+the top expression PCs removed. Each feature's eQTL effect r is estimated over
+the labelled donors, leaving out the donor being scored, and only features with
+p ≤ 1e-3 are used. A donor's score against sample s is Σ r · expression ·
+dosage(s), as a robust z among all samples. Calls:
+- **own genotype:** the label is the best match, z ≥ 6, and it leads the next sample by ≥ 3.
+- **other person:** another sample leads the label and the runner-up by ≥ 3, with z ≥ 6.
+- **no signal:** neither reaches z 6.
+- **unclear:** anything else.
+- **identified / not genotyped:** for donors without a genotyped label.
+
+Donor IDs of sex, identity or genotype mismatches go to `restricted/` for
 follow-up on the cluster; they are never logged. On DAIC, `bash
 slurm/submit_qc.sh` submits everything (gene lists, five scans, one job per
 check); `scripts/qc_figures.py` draws the figures from the aggregate tables.

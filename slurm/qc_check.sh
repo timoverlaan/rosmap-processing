@@ -5,6 +5,7 @@
 # A failure for one dataset does not stop the others (the job then fails).
 #   sbatch slurm/qc_check.sh sex config/data_qc/*.yaml
 #   sbatch slurm/qc_check.sh identity config/data_qc/{rosmap_mit,rosmap_green,diverse_cohorts,psychad}.yaml
+#   sbatch slurm/qc_check.sh genotype config/data_qc/{rosmap_mit,rosmap_green,diverse_cohorts,psychad}.yaml
 #SBATCH --account=daic-eemcs-insy-prb
 #SBATCH --partition=all
 #SBATCH --time=06:00:00
@@ -25,6 +26,13 @@ echo "check: $CHECK on $*"
 case "$CHECK" in
     sex-de-compare|identity)
         rp pipeline qc-check "$CHECK" "$@"
+        ;;
+    genotype)
+        # Dosages at the eQTL variants (scripts/extract_dosages.py, restricted)
+        # and the GTEx cortex eQTLs (scripts/gtex_eqtls.py)
+        rp pipeline qc-check genotype "$@" \
+            --genotypes data/v2/genotypes/restricted/rosmap_imputed_eqtl_dosages.tsv.gz \
+            --eqtls data/v2/reference/gtex_cortex_eqtls.tsv
         ;;
     *)
         status=0

@@ -159,3 +159,77 @@ def test_metadata_and_identity(setup):
     data_qc.run_check("sex-de-compare", specs, output=tmp_path / "compare")
     compare = pd.read_csv(tmp_path / "compare" / "sex_de_compare.tsv", sep="\t")
     assert compare[compare["genes"] == "all"]["pearson_t"].min() > 0
+
+
+def test_genotype_check_finds_swaps(tmp_path):
+    """60 donors, 100 genotyped persons, 150 strong eQTLs. Donor 10's sample is
+    person 80's; donors 20 and 21 are swapped; donor 30 has no ID mapping."""
+    rng = np.random.default_rng(7)
+    n_donors, n_persons, k = 60, 100, 150
+    dosage = rng.binomial(2, rng.uniform(0.25, 0.5, size=k), size=(n_persons, k)).astype(float)
+    true = np.arange(n_donors)
+    true[10], true[20], true[21] = 80, 21, 20
+    genes = NAMED + [f"E{i}" for i in range(k)] + [f"G{i}" for i in range(100)]
+    base = rng.gamma(2.0, 1.0, size=len(genes))
+    base[len(NAMED):len(NAMED) + k] = 2.0
+    blocks, obs = [], []
+    for d in range(n_donors):
+        for celltype in ("Excitatory", "Astrocytes"):
+            r = np.tile(base * rng.lognormal(0, 0.1, size=len(genes)), (25, 1))
+            r[:, len(NAMED):len(NAMED) + k] *= np.exp(1.2 * (dosage[true[d]] - 1))
+            r[:, 7] = 8.0 if celltype == "Excitatory" else 0.05
+            r[:, 9] = 8.0 if celltype == "Astrocytes" else 0.05
+            blocks.append(rng.poisson(r * rng.uniform(0.5, 2.0, size=(25, 1))))
+            obs.append(pd.DataFrame({"individualID": f"R{d:03d}" if d != 30 else "X030",
+                                     "source_file": f"x/{celltype}.h5ad", "fine": f"{celltype}_sub",
+                                     "msex": float(d % 2)}, index=[f"d{d}_{celltype}_{i}" for i in range(25)]))
+    ad.AnnData(sp.csr_matrix(np.vstack(blocks).astype(np.float32)), obs=pd.concat(obs),
+               var=pd.DataFrame(index=genes)).write_h5ad(tmp_path / "g.h5ad")
+    gene_ids = [f"ENSG{i:011d}" for i in range(len(genes))]
+    pd.DataFrame({"var_name": genes, "gene_id": gene_ids, "ref_name": genes, "method": "symbol"}).to_csv(
+        tmp_path / "map.tsv", sep="\t", index=False)
+    (tmp_path / "genes.txt").write_text("\n".join(genes) + "\n")
+    for name in ("mt", "x", "y"):
+        (tmp_path / f"{name}.txt").write_text("\n")
+    be_spec = {"output_dir": str(tmp_path / "be"), "gene_sets": {"all": str(tmp_path / "genes.txt")},
+               "datasets": {"g": {"counts": str(tmp_path / "g.h5ad"), "gene_map": str(tmp_path / "map.tsv"),
+                                  "donor": "individualID",
+                                  "celltype": [{"column": "source_file", "match": "Excitatory", "label": "Exc"},
+                                               {"column": "source_file", "match": "Astrocytes", "label": "Ast"}],
+                                  "covariates": {"sex": {"column": "msex"}}}}}
+    (tmp_path / "be.yaml").write_text(yaml.safe_dump(be_spec))
+    qc = {"output_dir": str(tmp_path / "qc"), "batch_effects": "be.yaml", "match_on": "individualID",
+          "author_label": "fine", "min_cells": 10, "chunk_size": 500,
+          "mt_genes": str(tmp_path / "mt.txt"), "x_genes": str(tmp_path / "x.txt"), "y_genes": str(tmp_path / "y.txt")}
+    (tmp_path / "qc.yaml").write_text(yaml.safe_dump(qc))
+    data_qc.run_scan(tmp_path / "qc.yaml")
+
+    # Half the variants are named by rsID, half by GRCh37 chr:pos; a quarter
+    # of the eQTLs give the alleles on the other strand
+    snp = [f"rs{i}" if i % 2 else f"chr1:{1000 + i}" for i in range(k)]
+    geno = pd.DataFrame(dosage.T, columns=[f"{'ROS' if p % 2 else 'MAP'}{p:08d}" for p in range(n_persons)])
+    geno.insert(0, "snp", snp)
+    geno.insert(1, "a1", "A")
+    geno.insert(2, "a2", "G")
+    geno.to_csv(tmp_path / "geno.tsv.gz", sep="\t", index=False)
+    pd.DataFrame({"gene_id": gene_ids[len(NAMED):len(NAMED) + k], "symbol": [f"E{i}" for i in range(k)],
+                  "tissue": "t", "rank": 1, "rsid": [f"rs{i}" for i in range(k)],
+                  "variant_b38": [f"chr1_{5000 + i}_A_G_b38" for i in range(k)], "chrom": "1",
+                  "pos_b37": [1000 + i for i in range(k)],
+                  "ref": ["T" if i % 4 == 0 else "A" for i in range(k)],
+                  "alt": ["C" if i % 4 == 0 else "G" for i in range(k)],
+                  "maf": 0.3, "pvalue": 1e-20, "nes": 1.0}).to_csv(tmp_path / "eqtls.tsv", sep="\t", index=False)
+    pd.DataFrame({"individualID": [f"R{p:03d}" for p in range(n_persons)],
+                  "projid": [f"{p:08d}" for p in range(n_persons)]}).to_csv(tmp_path / "ids.csv", index=False)
+
+    out = data_qc.run_check("genotype", [tmp_path / "qc.yaml"], output=tmp_path / "genotype",
+                            genotypes=tmp_path / "geno.tsv.gz", eqtls=tmp_path / "eqtls.tsv",
+                            id_map=tmp_path / "ids.csv")
+    s = pd.read_csv(out / "genotype_summary.tsv", sep="\t").iloc[0]
+    assert s["n_eqtl_pairs"] == k and s["n_genotyped_label"] == n_donors - 1
+    assert s["n_other_person"] == 3 and s["n_other_person_in_dataset"] == 2 and s["n_mutual_swaps"] == 1
+    assert s["n_own_genotype"] == n_donors - 4 and s["n_identified"] == 1
+    calls = pd.read_csv(out / "restricted" / "genotype_calls_qc.tsv", sep="\t", dtype=str).set_index("donor")
+    assert calls.loc["R010", "call"] == "other person" and calls.loc["R010", "best_projid"] == "80"
+    assert calls.loc["X030", "call"] == "identified" and calls.loc["X030", "best_projid"] == "30"
+    assert calls.loc["R020", "best_is_donor"] == "R021"

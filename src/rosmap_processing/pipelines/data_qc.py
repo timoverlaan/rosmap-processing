@@ -38,6 +38,10 @@ the spec's output_dir (one spec) or data/v2/qc/<check> (several):
     identity        (several specs) donors in two datasets: agreement of
                     their metadata, and whether a donor's expression matches
                     its own profile in the other dataset best
+    genotype        (one or more specs) whether a donor's expression at
+                    strong cis-eQTLs matches the genotype of the person it is
+                    labelled as, scored against every genotyped sample (so a
+                    swapped sample is also identified); -> data/v2/qc/genotype
 
 Individual-level lists for follow-up (donor IDs of sex or identity
 mismatches) go to <output>/restricted/ and are never logged.
@@ -90,7 +94,8 @@ MARKERS = {
 }
 MATHYS2019_CELLTYPES = {"Ex": "Exc", "In": "Inh", "Ast": "Ast", "Oli": "Oli", "Opc": "OPC", "Mic": "Mic"}
 QUANTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
-CHECKS = ("totals", "cells", "sex", "markers", "sex-de", "ad-de", "metadata", "sex-de-compare", "identity")
+CHECKS = ("totals", "cells", "sex", "markers", "sex-de", "ad-de", "metadata", "sex-de-compare", "identity",
+          "genotype")
 MULTI_CHECKS = ("sex-de-compare", "identity")
 
 QC_DEFAULTS: Dict[str, Any] = {
@@ -1246,14 +1251,303 @@ def check_identity(specs: List[Dict[str, Any]], output: Path) -> Dict[str, pd.Da
     return out
 
 
+# ---------------------------------------------------------------- checks: genotype
+
+GENOTYPE_Z = 6.0          # a confident identity: robust z of the score among all genotyped people
+GENOTYPE_MARGIN = 3.0     # ... at least this far above the next person
+GENOTYPE_PCS = 10         # expression PCs removed per layer (at most one per 10 donors)
+GENOTYPE_MAX_P = 1e-3     # features kept: in-sample eQTL p at most this
+GENOTYPE_MIN_CPM = 5.0    # eQTL genes expressed at least this much in a layer
+GENOTYPE_MIN_DONORS = 30
+_COMPLEMENT = str.maketrans("ACGT", "TGCA")
+
+
+def _projid(values) -> np.ndarray:
+    """projid as digits without leading zeros: '00123456', 123456.0 and
+    'ROS00123456' (a genotype sample) alike; '' when there is none."""
+    s = pd.Series(values, dtype=object).astype(str).str.extract(r"(\d+)(?:\.0+)?$")[0]
+    return s.map(lambda x: str(int(x)) if isinstance(x, str) else "").to_numpy(dtype=object)
+
+
+def read_genotypes(path: Union[str, Path]):
+    """A dosage table (snp, a1, a2, then one column per genotyped sample) ->
+    (variants, sample IDs, dosage matrix variants x samples)."""
+    table = pd.read_csv(path, sep="\t", dtype={"snp": str, "a1": str, "a2": str})
+    return (table[["snp", "a1", "a2"]].reset_index(drop=True), np.asarray(table.columns[3:], dtype=str),
+            table.iloc[:, 3:].to_numpy(dtype=np.float64))
+
+
+def _match_eqtls(eqtls: pd.DataFrame, variants: pd.DataFrame) -> np.ndarray:
+    """Per eQTL, the genotype row of its variant (by rsID or GRCh37 chr:pos,
+    with the same alleles on either strand), else -1."""
+    rows: Dict[str, List[int]] = {}
+    for i, snp in enumerate(variants["snp"]):
+        rows.setdefault(snp, []).append(i)
+    a1, a2 = variants["a1"].to_numpy(), variants["a2"].to_numpy()
+    out = []
+    for e in eqtls.itertuples():
+        alleles = {str(e.ref), str(e.alt)}
+        flipped = {a.translate(_COMPLEMENT) for a in alleles}
+        candidates = list(rows.get(str(e.rsid), []))
+        if pd.notna(e.pos_b37):
+            candidates += rows.get(f"chr{e.chrom}:{int(e.pos_b37)}", [])
+        out.append(next((i for i in candidates if {a1[i], a2[i]} in (alleles, flipped)), -1))
+    return np.asarray(out, dtype=np.int64)
+
+
+def _genotype_layers(scan: Scan, gene_cols: np.ndarray, spec: Dict[str, Any]):
+    """Per layer (all nuclei of a donor, and each cell type): the donors in it
+    and the eQTL genes' log-CPM with the top expression PCs regressed out,
+    standardized (NaN for genes expressed too little in the layer)."""
+    g = scan.groups
+    n = scan.n_donor_ids
+    total = np.zeros((n, len(scan.genes)))
+    total_cells = np.zeros(n)
+    layers = []
+    for t in scan.celltypes:
+        rows = np.flatnonzero((g["celltype_name"] == t).to_numpy())
+        if not len(rows):
+            continue
+        counts = scan.pseudobulk_rows(rows)
+        donors = g["donor"].to_numpy()[rows]
+        np.add.at(total, donors, counts)
+        n_cells = g["n_cells"].to_numpy()[rows]
+        np.add.at(total_cells, donors, n_cells)
+        if t != OTHER:
+            keep = n_cells >= spec["min_cells"]
+            layers.append((t, donors[keep], counts[keep]))
+    keep = total_cells >= spec["min_cells"]
+    layers.insert(0, ("all", np.flatnonzero(keep), total[keep]))
+    del total
+    out = []
+    for name, donors, counts in layers:
+        if len(donors) < GENOTYPE_MIN_DONORS:
+            continue
+        library = counts.sum(axis=1)
+        cpm = counts / np.maximum(library, 1)[:, None] * 1e6
+        mean_cpm = cpm.mean(axis=0)
+        y = np.log2(cpm[:, mean_cpm >= 10] + 1)
+        sd = y.std(axis=0)
+        y = (y[:, sd > 0] - y[:, sd > 0].mean(axis=0)) / sd[sd > 0]
+        k = min(GENOTYPE_PCS, len(donors) // 10, y.shape[1])
+        X = np.hstack([np.ones((len(donors), 1)), np.linalg.svd(y, full_matrices=False)[0][:, :k]])
+        feature = np.log2(cpm[:, gene_cols] + 1)
+        resid = feature - X @ np.linalg.lstsq(X, feature, rcond=None)[0]
+        sd = resid.std(axis=0)
+        ok = (mean_cpm[gene_cols] >= GENOTYPE_MIN_CPM) & (sd > 0)
+        z = np.full(resid.shape, np.nan)
+        z[:, ok] = (resid[:, ok] - resid[:, ok].mean(axis=0)) / sd[ok]
+        out.append((name, donors, z, k))
+    return out
+
+
+def _genotype_scores(E: np.ndarray, Zf: np.ndarray, own: np.ndarray):
+    """Score of each donor's expression against each genotyped sample.
+
+    E: donors x features (standardized expression, NaN = no data); Zf:
+    samples x features (standardized dosage of the feature's variant); own:
+    each donor's labelled sample (-1 for none). The eQTL effect r of each
+    feature is estimated over the labelled donors (left out for the donor
+    scored); features with p > GENOTYPE_MAX_P get no weight. Score =
+    sum_f r_f * E_df * Zf_sf, as a robust z over all samples."""
+    has = own >= 0
+    Zown = np.full(E.shape, np.nan)
+    Zown[has] = Zf[own[has]]
+    valid = np.isfinite(E) & np.isfinite(Zown)
+    n = valid.sum(axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        e = np.where(valid, E, np.nan)
+        e = (e - np.nanmean(e, axis=0)) / np.nanstd(e, axis=0)
+        z = np.where(valid, Zown, np.nan)
+        z = (z - np.nanmean(z, axis=0)) / np.nanstd(z, axis=0)
+        r = np.nanmean(e * z, axis=0)
+        t = r * np.sqrt((n - 2) / np.maximum(1 - r ** 2, 1e-12))
+    p = np.where(n >= GENOTYPE_MIN_DONORS, 2 * stats.t.sf(np.abs(np.nan_to_num(t)), np.maximum(n - 2, 1)), 1.0)
+    kept = np.isfinite(r) & (p <= GENOTYPE_MAX_P)
+    W = np.where(valid, (n * r - np.nan_to_num(e * z)) / np.maximum(n - 1, 1), r)
+    W[:, ~kept] = 0
+    S = (np.nan_to_num(W) * np.nan_to_num(E)) @ np.nan_to_num(Zf).T
+    med = np.median(S, axis=1, keepdims=True)
+    mad = 1.4826 * np.median(np.abs(S - med), axis=1, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        Zs = np.where(mad > 0, (S - med) / mad, np.nan)
+    return Zs, kept, r, n
+
+
+def _genotype_calls(Zs: np.ndarray, own: np.ndarray) -> pd.DataFrame:
+    rows = []
+    for d in range(Zs.shape[0]):
+        z = Zs[d]
+        if not np.isfinite(z).any():
+            rows.append({"call": "no data", "own_z": np.nan, "best": -1, "best_z": np.nan, "next_z": np.nan})
+            continue
+        order = np.argsort(-np.nan_to_num(z, nan=-np.inf))
+        best, best_z, next_z = int(order[0]), float(z[order[0]]), float(z[order[1]])
+        if own[d] >= 0:
+            own_z = float(z[own[d]])
+            other_z = float(z[order[1]] if best == own[d] else best_z)
+            if best == own[d] and own_z >= GENOTYPE_Z and own_z - other_z >= GENOTYPE_MARGIN:
+                call = "own genotype"
+            elif best != own[d] and best_z >= GENOTYPE_Z and best_z - own_z >= GENOTYPE_MARGIN \
+                    and best_z - next_z >= GENOTYPE_MARGIN:
+                call = "other person"
+            elif max(own_z, best_z) < GENOTYPE_Z:
+                call = "no signal"
+            else:
+                call = "unclear"
+        else:
+            own_z = np.nan
+            call = ("identified" if best_z >= GENOTYPE_Z and best_z - next_z >= GENOTYPE_MARGIN
+                    else "not genotyped")
+        rows.append({"call": call, "own_z": own_z, "best": best, "best_z": best_z, "next_z": next_z})
+    return pd.DataFrame(rows)
+
+
+def check_genotype(specs: List[Dict[str, Any]], output: Path, genotypes: Union[str, Path],
+                   eqtls: Union[str, Path], id_map: Union[str, Path]) -> Dict[str, pd.DataFrame]:
+    """Does each donor's expression match the genotype of the person it is
+    labelled as? Over strong cis-eQTLs (e.g. GTEx cortex, scripts/gtex_eqtls.py),
+    each donor is scored against every genotyped sample, as in MixupMapper
+    (Westra et al. 2011). id_map: CSV with individualID and projid (the match
+    key -> the projid in the genotype sample IDs)."""
+    variants, samples, dosage = read_genotypes(genotypes)
+    eqtl = pd.read_csv(eqtls, sep="\t", dtype={"chrom": str, "rsid": str, "gene_id": str})
+    eqtl["row"] = _match_eqtls(eqtl, variants)
+    eqtl = eqtl[eqtl["row"] >= 0].reset_index(drop=True)
+    sample_pid = _projid(samples)
+    first = ~pd.Series(sample_pid).duplicated().to_numpy() & (sample_pid != "")
+    samples, sample_pid, dosage = samples[first], sample_pid[first], dosage[:, first]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        Zall = ((dosage - dosage.mean(axis=1, keepdims=True)) / dosage.std(axis=1, keepdims=True)).T
+    logger.info(f"genotypes: {len(samples)} samples, {len(variants)} variants; {len(eqtl)} eQTL pairs found "
+                f"({eqtl['gene_id'].nunique()} genes)")
+    ids = pd.read_csv(id_map, dtype=str, usecols=["individualID", "projid"]).dropna()
+    to_pid = pd.Series(_projid(ids["projid"]), index=ids["individualID"].to_numpy())
+    to_pid = to_pid[~to_pid.index.duplicated()]
+    sample_index = pd.Series(np.arange(len(samples)), index=sample_pid)
+    restricted = _restricted(output)
+
+    summary, features, sex_rows, hist, by_person = [], [], [], [], {}
+    for spec in specs:
+        scan = Scan(spec)
+        donors = scan.donors
+        match = donors["match"] if "match" in donors else pd.Series([np.nan] * len(donors))
+        label_pid = match.map(to_pid).fillna("").to_numpy(dtype=object)
+        own = sample_index.reindex(label_pid).fillna(-1).to_numpy(dtype=np.int64)
+        gid = pd.Series(np.arange(len(scan.genes)), index=scan.genes["gene_id"].fillna(""))
+        gid = gid[~gid.index.duplicated()]
+        pairs = eqtl[eqtl["gene_id"].isin(gid.index)].reset_index(drop=True)
+        gene_cols = gid.loc[pairs["gene_id"]].to_numpy()
+        blocks, snp_rows, layer_of = [], [], []
+        for name, layer_donors, z, k in _genotype_layers(scan, gene_cols, spec):
+            ok = np.flatnonzero(np.isfinite(z).any(axis=0))
+            block = np.full((len(donors), len(ok)), np.nan)
+            block[layer_donors] = z[:, ok]
+            blocks.append(block)
+            snp_rows.append(pairs["row"].to_numpy()[ok])
+            layer_of += [(name, k)] * len(ok)
+        E = np.hstack(blocks)
+        Zf = Zall[:, np.concatenate(snp_rows)]
+        Zs, kept, r, n_f = _genotype_scores(E, Zf, own)
+        calls = _genotype_calls(Zs, own)
+        calls.insert(0, "donor", donors["donor"].to_numpy())
+        calls.insert(1, "match", match.to_numpy())
+        calls.insert(2, "label_projid", label_pid)
+        calls["best_projid"] = np.where(calls["best"] >= 0, sample_pid[np.maximum(calls["best"], 0)], "")
+        # A best match that is another donor of this dataset: a swap or a duplicate label
+        in_data = pd.Series(np.arange(len(donors)), index=label_pid)
+        in_data = in_data[(in_data.index != "") & ~in_data.index.duplicated()]
+        other = calls["call"].isin(["other person", "identified"])
+        calls["best_is_donor"] = ""
+        hit = other & calls["best_projid"].isin(in_data.index)
+        calls.loc[hit, "best_is_donor"] = donors["donor"].to_numpy()[in_data.loc[calls.loc[hit, "best_projid"]].to_numpy()]
+        mutual = 0
+        for i in np.flatnonzero(hit.to_numpy()):
+            j = in_data.loc[calls.at[i, "best_projid"]]
+            mutual += int(calls.at[j, "best_projid"] == label_pid[i] and calls.at[j, "call"] == "other person")
+        confident = calls["call"].isin(["own genotype", "other person", "identified"])
+        same_twice = int(calls.loc[confident, "best_projid"].duplicated(keep=False).sum())
+        calls.drop(columns="best").to_csv(restricted / f"genotype_calls_{scan.name}.tsv", sep="\t", index=False)
+        for m, pid, c in zip(match, calls["best_projid"], calls["call"]):
+            if isinstance(m, str) and c in ("own genotype", "other person", "identified"):
+                by_person.setdefault(m, {})[scan.name] = pid
+
+        labelled = own >= 0
+        matched = calls["call"] == "own genotype"
+        other_z = np.where(calls["best"] == own, calls["next_z"], calls["best_z"])
+        counts = calls["call"].value_counts()
+        row = {"dataset": scan.name, "n_donors": len(donors), "n_genotyped_label": int(labelled.sum()),
+               "n_features": int(E.shape[1]), "n_features_kept": int(kept.sum()),
+               "n_eqtl_pairs": len(pairs), "n_genotype_samples": len(samples),
+               "median_own_z": float(np.nanmedian(calls.loc[labelled, "own_z"])) if labelled.any() else np.nan}
+        for c in ("own genotype", "other person", "unclear", "no signal", "no data", "identified", "not genotyped"):
+            row[f"n_{c.replace(' ', '_')}"] = int(counts.get(c, 0))
+        row["n_other_person_in_dataset"] = int((hit & (calls["call"] == "other person")).sum())
+        row["n_mutual_swaps"] = mutual // 2
+        row["n_same_person_twice"] = same_twice
+        row["p99_next_z_of_own"] = float(np.nanpercentile(other_z[matched], 99)) if matched.any() else np.nan
+        row["max_next_z_of_own"] = float(np.nanmax(other_z[matched])) if matched.any() else np.nan
+        summary.append(row)
+
+        layer_names = np.array([name for name, _ in layer_of])
+        for name in dict.fromkeys(layer_names):
+            sel = layer_names == name
+            features.append({"dataset": scan.name, "layer": name, "n_pcs": dict(layer_of)[name],
+                             "n_features": int(sel.sum()), "n_kept": int((kept & sel).sum()),
+                             "median_donors": float(np.median(n_f[sel])),
+                             "median_abs_r_kept": float(np.median(np.abs(r[kept & sel]))) if (kept & sel).any()
+                             else np.nan})
+        edges = np.arange(-10, 60.5, 1.0)
+        for measure, values in (("own_z", calls.loc[labelled, "own_z"].to_numpy()),
+                                ("best_other_z", other_z[labelled.astype(bool)])):
+            v = np.clip(values[np.isfinite(values)], edges[0], edges[-1] - 1e-9)
+            h, _ = np.histogram(v, bins=edges)
+            hist += [{"dataset": scan.name, "measure": measure, "bin_left": float(lo), "bin_right": float(hi),
+                      "n_donors": int(k)} for lo, hi, k in zip(edges[:-1], edges[1:], h)]
+
+        sex_path = Path(spec["output_dir"]) / "restricted" / "sex_by_donor.tsv"
+        if sex_path.exists():
+            sex = pd.read_csv(sex_path, sep="\t", dtype={"donor": str})
+            off = (sex["expression"].isin(["M", "F"]) & sex["recorded"].isin(["M", "F"])
+                   & (sex["expression"] != sex["recorded"])).to_numpy()
+            amb = (sex["expression"] == "ambiguous").to_numpy()
+            for what, mask in (("expression sex differs from the record", off), ("expression sex ambiguous", amb)):
+                vc = calls.loc[mask, "call"].value_counts()
+                sex_rows.append({"dataset": scan.name, "donors": what, "n": int(mask.sum()),
+                                 **{f"n_{c.replace(' ', '_')}": int(vc.get(c, 0)) for c in
+                                    ("own genotype", "other person", "unclear", "no signal", "identified",
+                                     "not genotyped")}})
+        logger.info(f"[{scan.name}] genotype calls: {counts.to_dict()}")
+
+    cross = []
+    for a, b in combinations([s["name"] for s in specs], 2):
+        both = [(p[a], p[b]) for p in by_person.values() if a in p and b in p]
+        cross.append({"dataset_a": a, "dataset_b": b, "n_persons_identified_in_both": len(both),
+                      "n_same_genotype": sum(x == y for x, y in both)})
+    out = {"genotype_summary": pd.DataFrame(summary), "genotype_features": pd.DataFrame(features),
+           "genotype_sex": pd.DataFrame(sex_rows), "genotype_cross": pd.DataFrame(cross),
+           "genotype_histograms": pd.DataFrame(hist)}
+    for name in ("genotype_summary", "genotype_features", "genotype_sex", "genotype_cross"):
+        _log_table("all", name, out[name])
+    return out
+
+
 # ---------------------------------------------------------------- entry point
 
 
 def run_check(check: str, spec_paths: Sequence[Union[str, Path]], output: Optional[Union[str, Path]] = None,
-              mathys2019: Optional[Union[str, Path]] = None) -> Path:
+              mathys2019: Optional[Union[str, Path]] = None, genotypes: Optional[Union[str, Path]] = None,
+              eqtls: Optional[Union[str, Path]] = None, id_map: Optional[Union[str, Path]] = None) -> Path:
     if check not in CHECKS:
         raise ValueError(f"Unknown check {check!r}; one of {CHECKS}")
     specs = [load_qc_spec(p) for p in spec_paths]
+    if check == "genotype":
+        if not (genotypes and eqtls and id_map):
+            raise ValueError("genotype needs --genotypes, --eqtls and --id-map")
+        output = Path(output or Path("data/v2/qc") / check)
+        output.mkdir(parents=True, exist_ok=True)
+        _write_tables(check_genotype(specs, output, genotypes, eqtls, id_map), output, check, spec_paths)
+        return output
     if check in MULTI_CHECKS:
         if len(specs) < 2:
             raise ValueError(f"{check} needs two or more specs")
