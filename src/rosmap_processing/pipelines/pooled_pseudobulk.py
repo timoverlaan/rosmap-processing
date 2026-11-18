@@ -480,6 +480,62 @@ def _umap(pcs: np.ndarray, spec) -> np.ndarray:
                      random_state=spec["seed"]).fit_transform(pcs)
 
 
+def reliability_rows(celltype: str, method: str, Y: np.ndarray, ds: np.ndarray, persons: np.ndarray,
+                     min_pairs: int) -> List[Dict[str, Any]]:
+    """cross_dataset_reliability per pair of datasets with at least min_pairs
+    persons in both."""
+    rows = []
+    for a, b in combinations(list(dict.fromkeys(ds)), 2):
+        ia, ib = np.flatnonzero(ds == a), np.flatnonzero(ds == b)
+        pa, pb = pd.Series(ia, index=persons[ia]), pd.Series(ib, index=persons[ib])
+        both = sorted(set(pa.index) & set(pb.index))
+        if len(both) >= min_pairs:
+            value = bm.shared_reliability(Y[pa[both].to_numpy()], Y[pb[both].to_numpy()])
+            rows.append(dict(celltype=celltype, method=method, metric="cross_dataset_reliability",
+                             label=f"{a} vs {b}", value=value, chance=0.0, n=len(both)))
+    return rows
+
+
+def score_methods(celltype: str, sub: pd.DataFrame, corrected: Dict[str, np.ndarray], spec,
+                  rng: np.random.Generator, Y: Optional[np.ndarray] = None):
+    """Mixing and replicate metrics of each method's matrix (samples x genes,
+    rows as in sub), and each method's PCs. With Y (the uncorrected matrix),
+    the anchor method's replicate metrics are cross-fitted."""
+    ds = sub["dataset"].to_numpy().astype(str)
+    batch = sub["batch"].to_numpy().astype(str)
+    persons = sub["person_id"].to_numpy().astype(str)
+    mixing = _mixing_labels(ds, batch, spec["batch_split"])
+    metrics: List[Dict[str, Any]] = []
+    all_pcs = {}
+    for method, Yc in corrected.items():
+        pcs = all_pcs[method] = _pca(Yc - Yc.mean(axis=0), spec["n_pcs"], spec["seed"])
+        for label, values, rows in mixing:
+            p = pcs if rows is None else pcs[rows]
+            base = dict(celltype=celltype, method=method, label=label, n=len(values))
+            metrics.append(dict(base, metric="pc_r2", value=bm.pc_regression(p, values), chance=np.nan))
+            accuracy, chance, _ = bm.classify(p, values, rng)
+            metrics.append(dict(base, metric="classifier_accuracy", value=accuracy, chance=chance))
+        if method != "anchor" or Y is None:
+            acc = replicate_stats(Yc, ds, persons)
+        else:  # cross-fitted: a person's offsets come from the other persons' pairs
+            replicated = sorted({persons[i] for i, _ in _replicate_pairs(persons, batch)})
+            folds = np.arange(len(replicated)) % spec["n_folds"]
+            rng.shuffle(folds)
+            acc = {}
+            for k in range(spec["n_folds"]):
+                fold = {p for p, f in zip(replicated, folds) if f == k}
+                if not fold:
+                    continue
+                Yk, _, _ = correct_anchor(Y, batch, persons, exclude=frozenset(fold))
+                for key, v in replicate_stats(Yk, ds, persons, queries=fold,
+                                              center=corrected["anchor"].mean(axis=0)).items():
+                    target = acc.setdefault(key, {k2: [] for k2 in v})
+                    for k2, values in v.items():
+                        target[k2] += values
+        metrics += _replicate_rows(celltype, method, acc, spec["min_pairs"])
+    return metrics, all_pcs
+
+
 def analyse_celltype(celltype: str, obs: pd.DataFrame, counts: np.ndarray, genes: pd.DataFrame, spec,
                      rng: np.random.Generator):
     """metrics, disease, de_pooled and offsets rows for one broad cell type,
@@ -513,42 +569,9 @@ def analyse_celltype(celltype: str, obs: pd.DataFrame, counts: np.ndarray, genes
 
     metrics: List[Dict[str, Any]] = [dict(celltype=celltype, method="any", metric="n_genes", label="",
                                           value=int(keep.sum()), chance=np.nan, n=len(sub))]
-    mixing = _mixing_labels(ds, batch, spec["batch_split"])
-    all_pcs = {}
-    for method, Yc in corrected.items():
-        pcs = all_pcs[method] = _pca(Yc - Yc.mean(axis=0), spec["n_pcs"], spec["seed"])
-        for label, values, rows in mixing:
-            p = pcs if rows is None else pcs[rows]
-            base = dict(celltype=celltype, method=method, label=label, n=len(values))
-            metrics.append(dict(base, metric="pc_r2", value=bm.pc_regression(p, values), chance=np.nan))
-            accuracy, chance, _ = bm.classify(p, values, rng)
-            metrics.append(dict(base, metric="classifier_accuracy", value=accuracy, chance=chance))
-        if method != "anchor":
-            acc = replicate_stats(Yc, ds, persons)
-        else:  # cross-fitted: a person's offsets come from the other persons' pairs
-            replicated = sorted({persons[i] for i, _ in _replicate_pairs(persons, batch)})
-            folds = np.arange(len(replicated)) % spec["n_folds"]
-            rng.shuffle(folds)
-            acc = {}
-            for k in range(spec["n_folds"]):
-                fold = {p for p, f in zip(replicated, folds) if f == k}
-                if not fold:
-                    continue
-                Yk, _, _ = correct_anchor(Y, batch, persons, exclude=frozenset(fold))
-                for key, v in replicate_stats(Yk, ds, persons, queries=fold,
-                                              center=corrected["anchor"].mean(axis=0)).items():
-                    target = acc.setdefault(key, {k2: [] for k2 in v})
-                    for k2, values in v.items():
-                        target[k2] += values
-        metrics += _replicate_rows(celltype, method, acc, spec["min_pairs"])
-    for a, b in combinations(names, 2):
-        ia, ib = np.flatnonzero(ds == a), np.flatnonzero(ds == b)
-        pa, pb = pd.Series(ia, index=persons[ia]), pd.Series(ib, index=persons[ib])
-        both = sorted(set(pa.index) & set(pb.index))
-        if len(both) >= spec["min_pairs"]:
-            value = bm.shared_reliability(Y[pa[both].to_numpy()], Y[pb[both].to_numpy()])
-            metrics.append(dict(celltype=celltype, method="any", metric="cross_dataset_reliability",
-                                label=f"{a} vs {b}", value=value, chance=0.0, n=len(both)))
+    scored, all_pcs = score_methods(celltype, sub, corrected, spec, rng, Y=Y)
+    metrics += scored
+    metrics += reliability_rows(celltype, "any", Y, ds, persons, spec["min_pairs"])
 
     disease_rows, de = disease_analysis(celltype, corrected, sub, genes_t, spec)
 

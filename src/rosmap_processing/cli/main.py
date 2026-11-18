@@ -256,6 +256,15 @@ def main():
     pooled_parser.add_argument("--overwrite", action="store_true",
                                help="Replace the output tables (reusing an existing pseudobulk.h5ad)")
     pooled_parser.add_argument("--rebuild", action="store_true", help="Also rebuild pseudobulk.h5ad from the counts")
+    scvi_parser = pipeline_subparsers.add_parser(
+        "scvi-integration",
+        help="scVI and scANVI on sampled cells of the pooled datasets, scored like the pseudobulk corrections",
+    )
+    scvi_parser.add_argument("spec", type=str, help="YAML spec, e.g. config/scvi_integration.yaml")
+    scvi_parser.add_argument("--stage", choices=["cells", "train", "score"], required=True,
+                             help="cells: sample cells (CPU); train: scVI + scANVI, then score (GPU); "
+                                  "score: only the scoring")
+    scvi_parser.add_argument("--overwrite", action="store_true", help="Replace the stage's existing output")
 
     # pipeline qc-scan / qc-check
     qc_scan_parser = pipeline_subparsers.add_parser(
@@ -274,6 +283,12 @@ def main():
                                  help="Output folder (default: the spec's output_dir, or data/v2/qc/<check>)")
     qc_check_parser.add_argument("--mathys2019", type=Path, default=None,
                                  help="Mathys 2019 DEG table (ad-de), e.g. data/mathys2019_DEGs.csv")
+    qc_check_parser.add_argument("--genotypes", type=Path, default=None,
+                                 help="genotype: dosage table at the eQTL variants (snp, a1, a2, one column per sample)")
+    qc_check_parser.add_argument("--eqtls", type=Path, default=None,
+                                 help="genotype: eQTL table from scripts/gtex_eqtls.py")
+    qc_check_parser.add_argument("--id-map", type=Path, default=Path("data/v2/download/ROSMAP/ROSMAP_clinical.csv"),
+                                 help="genotype: CSV with individualID and projid (default: the ROSMAP clinical CSV)")
 
     # pipeline umap
     umap_parser = pipeline_subparsers.add_parser(
@@ -551,6 +566,9 @@ def handle_pipeline_command(args):
     elif args.pipeline_command == "pooled-pseudobulk":
         from rosmap_processing.pipelines.pooled_pseudobulk import run_pooled_pseudobulk
         run_pooled_pseudobulk(args.spec, overwrite=args.overwrite, rebuild=args.rebuild)
+    elif args.pipeline_command == "scvi-integration":
+        from rosmap_processing.pipelines.scvi_integration import run_scvi_integration
+        run_scvi_integration(args.spec, args.stage, overwrite=args.overwrite)
 
     elif args.pipeline_command == "qc-scan":
         from rosmap_processing.pipelines.data_qc import run_scan
@@ -558,7 +576,8 @@ def handle_pipeline_command(args):
 
     elif args.pipeline_command == "qc-check":
         from rosmap_processing.pipelines.data_qc import run_check
-        run_check(args.check, args.specs, output=args.output, mathys2019=args.mathys2019)
+        run_check(args.check, args.specs, output=args.output, mathys2019=args.mathys2019,
+                  genotypes=args.genotypes, eqtls=args.eqtls, id_map=args.id_map)
 
     elif args.pipeline_command == "umap":
         from rosmap_processing.pipelines.umap_plots import run_umap

@@ -1,0 +1,16 @@
+# scVI and scANVI on sampled cells of the pooled pseudobulk datasets, scored
+# like the pseudobulk corrections (pipelines/scvi_integration.py). Needs the
+# pooled pseudobulk's inputs (donor table, gene maps) and the 0.3.0 container
+# (pixi environment gpu):
+#   sbatch slurm/scvi_cells.sh     # CPU: cells.h5ad
+#   sbatch slurm/scvi_train.sh     # GPU: models, samples.h5ad, metrics, UMAPs
+pooled_spec: config/pooled_pseudobulk.yaml
+output_dir: data/v2/scvi
+max_cells_per_sample: 100   # nuclei per dataset x donor x cell type
+n_hvg: 3000                 # seurat_v3 over the batches (dataset; PsychAD x brain bank)
+n_latent: 30
+n_layers: 2
+n_hidden: 128
+max_epochs: 30              # with early stopping on the validation ELBO
+scanvi_epochs: 10
+batch_size: 1024

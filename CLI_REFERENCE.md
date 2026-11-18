@@ -306,6 +306,34 @@ person's samples in two datasets joined by a line; `umap/overview.png` shows
 all cell types coloured by batch. `--overwrite` reruns the analyses on the
 existing pseudobulk; `--rebuild` also re-reads the count files.
 
+### `pipeline scvi-integration`
+```bash
+python -m rosmap_processing pipeline scvi-integration config/scvi_integration.yaml --stage cells|train|score [--overwrite]
+```
+scVI and scANVI on cells of the pooled pseudobulk datasets (same cell filters,
+cell types, donor table and batches), scored like the pseudobulk corrections.
+`cells`: up to `max_cells_per_sample` random nuclei per dataset x donor x cell
+type, their counts for the shared genes (`cells.h5ad`, restricted). `train`
+(GPU, pixi environment `gpu`): seurat_v3 HVGs over the batches, scVI with the
+batch as `batch_key`, scANVI from it with the broad cell types as labels; per
+sample the cells' decoded expression (averaged over all batches) and latent
+means (`samples.h5ad`, restricted; `history.tsv`), then `score`. `score`: per
+cell type, the same nuclei's raw pseudobulk (none, regress) against scVI and
+scANVI on mixing, replicates, reliability between datasets and the disease
+models (`metrics.tsv`, `disease.tsv`, `umap/`). The raw pseudobulk sums at
+most `max_cells_per_sample` nuclei, so its numbers differ from `pipeline
+pooled-pseudobulk`.
+
+### `scripts/pooled_split.py`
+```bash
+python scripts/pooled_split.py config/pooled_pseudobulk.yaml [--dataset diverse_cohorts]     [--pool-column batch] [--class-column broadcellclass]
+```
+What splits one dataset's pooled pseudobulk samples in two: k-means within the
+dataset per cell type (sex means removed), then per group the donor
+covariates, library pool numbers, nuclei and genes per nucleus, cell class
+shares, ambient RNA markers, replicate retrieval and the genes that differ
+(`split_<dataset>/report.txt`, `umap.png`; aggregates only).
+
 ### `pipeline umap`
 ```bash
 python -m rosmap_processing pipeline umap config/batch_effects/<name>.yaml \

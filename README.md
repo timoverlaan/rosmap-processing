@@ -57,7 +57,8 @@ data/v2/batch_effects/        obs column summaries and batch-effect tables (aggr
 data/v2/qc/<dataset>/         data QC tables (aggregates); restricted/ holds the per-cell scan
 data/v2/qc/{identity,sex-de-compare}/  data QC across datasets
 data/v2/donors/               global donor table (restricted) + overlap, summary, conflicts (aggregates)
-data/v2/pooled_pseudobulk/    pooled pseudobulk.h5ad (restricted) + correction and disease tables (aggregates), umap/
+data/v2/pooled_pseudobulk/    pooled pseudobulk.h5ad (restricted) + correction and disease tables (aggregates), umap/, split_<dataset>/
+data/v2/scvi/                 scVI/scANVI: cells.h5ad, samples.h5ad, models (restricted) + metrics, disease, umap/ (aggregates)
 ```
 
 Processed datasets:
@@ -94,7 +95,9 @@ its batch is dataset x brain bank.
 Submit from the repo root, with a valid Kerberos ticket (`klist`; `kinit -R`).
 The scripts use account `daic-eemcs-insy-prb`, partition `all`, and the
 container `container_pixi_0-2-1.sif` (code is mounted from `src/`, so code
-changes need no rebuild). Each step skips outputs that already exist, so a
+changes need no rebuild). The scVI jobs use `container_pixi_0-3-0.sif`, which
+adds a `gpu` pixi environment (PyTorch with CUDA 12, scvi-tools; the default
+environment is unchanged). Each step skips outputs that already exist, so a
 failed job can be resubmitted.
 
 ```bash
@@ -128,6 +131,9 @@ sbatch slurm/batch_effects.sh config/batch_effects/<spec>.yaml  # diverse_cohort
 bash slurm/submit_qc.sh                           # login node: data QC, one job per scan and per check
 sbatch slurm/donor_table.sh                       # one row per person over the five datasets (minutes)
 sbatch slurm/pooled_pseudobulk.sh                 # pooled pseudobulk + dataset corrections (after the donor table)
+sbatch slurm/pooled_split.sh                      # what splits DiverseCohorts' pseudobulk samples in two
+sbatch slurm/scvi_cells.sh                        # scVI, 1: sampled cells (CPU; 0.3.0 container)
+sbatch slurm/scvi_train.sh                        # scVI, 2: scVI + scANVI on a GPU, scored like the pseudobulk
 ```
 
 The batch-effect specs name obs columns (batch, cell type, covariates); check

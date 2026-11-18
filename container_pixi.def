@@ -17,7 +17,9 @@ From: ghcr.io/prefix-dev/pixi:0.67.2-noble
 
     cd /opt/app
 
-    # Setup pixi dependencies
+    # Setup pixi dependencies (the gpu environment needs CUDA 12; there is no
+    # GPU driver during the build, so declare it)
+    export CONDA_OVERRIDE_CUDA=12.9
     pixi install --all
 
     # Clean up
