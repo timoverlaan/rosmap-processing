@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
@@ -73,24 +74,29 @@ def add_grch37(table: pd.DataFrame) -> pd.Series:
     """GRCh37 position of each rsID from Ensembl's GRCh37 REST server (the
     mapping on the same chromosome; none if it is not unique there)."""
     rsids = sorted(set(table["rsid"].dropna()) - {""})
-    positions = {}
-    for i in range(0, len(rsids), 200):
-        body = json.dumps({"ids": rsids[i:i + 200]}).encode()
+
+    def lookup(batch):
+        body = json.dumps({"ids": batch}).encode()
         request = urllib.request.Request("https://grch37.rest.ensembl.org/variation/homo_sapiens", data=body,
                                          headers={"Content-Type": "application/json", "Accept": "application/json",
                                                   "User-Agent": "eqtl-list/1.0"})
         for attempt in range(5):
             try:
-                with urllib.request.urlopen(request, timeout=120) as response:
-                    found = json.load(response)
-                break
+                with urllib.request.urlopen(request, timeout=300) as response:
+                    return json.load(response)
             except Exception:
                 if attempt == 4:
-                    raise
+                    print(f"Ensembl lookup failed for {len(batch)} rsIDs; they keep no GRCh37 position")
+                    return {}
                 time.sleep(2 ** attempt)
-        for rsid, record in found.items():
-            positions[rsid] = {(m["seq_region_name"], m["start"]) for m in record.get("mappings", [])
-                               if m.get("assembly_name") == "GRCh37"}
+
+    positions = {}
+    batches = [rsids[i:i + 25] for i in range(0, len(rsids), 25)]
+    with ThreadPoolExecutor(4) as pool:  # Ensembl allows 15 requests per second
+        for found in pool.map(lookup, batches):
+            for rsid, record in found.items():
+                positions[rsid] = {(m["seq_region_name"], m["start"]) for m in record.get("mappings", [])
+                                   if m.get("assembly_name") == "GRCh37"}
     out = []
     for rsid, chrom in zip(table["rsid"], table["chrom"]):
         here = [p for c, p in positions.get(rsid, ()) if c == chrom]
