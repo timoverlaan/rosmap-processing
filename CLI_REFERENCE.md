@@ -383,7 +383,7 @@ per-cell values and pseudobulk sums per donor x cell type to
 | `metadata` | `metadata_agreement.tsv`, `metadata_confusion.tsv`: the `metadata_sources` compared per donor; `metadata_pools.tsv` |
 | `sex-de-compare` | (several specs, `data/v2/qc/sex-de-compare/`) concordance of the sex effects, ranks of known sex genes |
 | `identity` | (several specs, `data/v2/qc/identity/`) donors in two datasets: metadata agreement, and how often a donor's own pseudobulk profile is its best match in the other dataset |
-| `genotype` | (one or more specs, `data/v2/qc/genotype/`) does a donor's expression match the genotype of the person it is labelled as? `genotype_summary.tsv`, `genotype_features.tsv`, `genotype_sex.tsv`, `genotype_cross.tsv`, `genotype_histograms.tsv` |
+| `genotype` | (one or more specs, `data/v2/qc/genotype/`) does a donor's expression match the genotype of the person it is labelled as? `genotype_summary.tsv`, `genotype_features.tsv`, `genotype_sex.tsv`, `genotype_matched_sex.tsv`, `genotype_cross.tsv`, `genotype_cross_detail.tsv`, `genotype_kinship.tsv`, `genotype_kinship_histogram.tsv`, `genotype_kinship_flagged.tsv`, `genotype_histograms.tsv` |
 
 The `genotype` check scores every donor against every genotyped sample over
 strong cis-eQTLs, as MixupMapper does (Westra et al. 2011). The eQTLs are the
@@ -411,6 +411,34 @@ dosage(s), as a robust z among all samples. Calls:
 - **no signal:** neither reaches z 6.
 - **unclear:** anything else.
 - **identified / not genotyped:** for donors without a genotyped label.
+
+No calls are made for a dataset whose kept features cover fewer than 200
+distinct variants (`calls_made` false; with almost no true eQTL signal the
+robust z breaks down). A call does not say which side is wrong: an RNA swap, a
+mislabelled genotype sample and a wrong ID-map entry look alike. The tables
+for checking that, without donor IDs:
+- **expected z and weak calls:** each donor's expected z is the median own z
+  of the 20 own-genotype donors nearest in nuclei count; a confident call below
+  65% of it is `weak` (`n_own_genotype_weak`, `n_other_or_identified_weak`),
+  e.g. a relative's tissue or a mixture.
+- **`genotype_matched_sex`:** per call, how often the donor's expression sex
+  agrees with the label's record and with the matched person's (from the ID
+  map's `msex`, else from the donor labelled as that person in the dataset).
+- **`genotype_cross` / `genotype_cross_detail`:** for a person in two datasets,
+  whether both match the label or both the same other sample (the label's
+  genotype or ID is wrong, not the RNA); and for each donor to check in one
+  dataset, the other dataset's call and its z against the sample matched in
+  the first (an RNA swap when the other dataset matches the label; a relative
+  when it reproduces a weak match).
+- **`genotype_kinship*`:** kinship of every pair of genotype samples over the
+  eQTL variants (mean product of standardized dosages: about 1 for the same
+  person, 0.5 first-degree, 0.25 second-degree), its histogram, and whether
+  the samples matched by `other person` / `identified` calls have a duplicate
+  or a relative in the genotype set. `genotype_histograms` also bins the best z
+  of donors without a genotyped label.
+
+Per-donor values (`expected_z`, `strength`, `weak`, `next_z`, the sexes,
+kinships, cross-dataset rows, related genotype pairs) are in `restricted/`.
 
 Donor IDs of sex, identity or genotype mismatches go to `restricted/` for
 follow-up on the cluster; they are never logged. On DAIC, `bash

@@ -2,6 +2,8 @@
 files: two datasets of the same donors, one donor with the wrong recorded sex,
 the authors' per-cell totals, and strong donor effects."""
 
+import shutil
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -238,16 +240,26 @@ def _assert_swaps_found(out, id_col):
     return calls[["call", f"best_{id_col}"]]
 
 
-def test_genotype_check_finds_swaps(tmp_path):
-    """ROSMAP-style: samples named ROS/MAP + projid, labels mapped to projids;
-    half the variants named by rsID, half by GRCh37 chr:pos."""
-    dosage = _genotype_setup(tmp_path)
+def _rosmap_genotypes(tmp_path, dosage, duplicate=None):
+    """ROSMAP-style dosages (samples ROS/MAP + projid; half the variants by
+    rsID, half by GRCh37 chr:pos) and an ID map with msex (projid p: p % 2).
+    duplicate: a person genotyped a second time, as projid 100 + that person."""
     n_persons, k = GENO_PERSONS, GENO_EQTLS
+    samples = [f"{'ROS' if p % 2 else 'MAP'}{p:08d}" for p in range(n_persons)]
+    if duplicate is not None:
+        dosage = np.vstack([dosage, dosage[duplicate]])
+        samples.append(f"ROS{100 + duplicate:08d}")
     _write_dosages(tmp_path / "geno.tsv.gz", dosage, [f"rs{i}" if i % 2 else f"chr1:{1000 + i}" for i in range(k)],
-                   [f"{'ROS' if p % 2 else 'MAP'}{p:08d}" for p in range(n_persons)])
+                   samples)
     pd.DataFrame({"individualID": [f"R{p:03d}" for p in range(n_persons)],
-                  "projid": [f"{p:08d}" for p in range(n_persons)]}).to_csv(tmp_path / "ids.csv", index=False)
+                  "projid": [f"{p:08d}" for p in range(n_persons)],
+                  "msex": [str(p % 2) for p in range(n_persons)]}).to_csv(tmp_path / "ids.csv", index=False)
 
+
+def test_genotype_check_finds_swaps(tmp_path, monkeypatch):
+    """ROSMAP-style: samples named ROS/MAP + projid, labels mapped to projids."""
+    monkeypatch.setattr(data_qc, "GENOTYPE_MIN_VARIANTS", 50)
+    _rosmap_genotypes(tmp_path, _genotype_setup(tmp_path))
     out = data_qc.run_check("genotype", [tmp_path / "qc.yaml"], output=tmp_path / "genotype",
                             genotypes=tmp_path / "geno.tsv.gz", eqtls=tmp_path / "eqtls.tsv",
                             id_map=tmp_path / "ids.csv")
@@ -256,9 +268,69 @@ def test_genotype_check_finds_swaps(tmp_path):
     assert calls.loc["X030"].tolist() == ["identified", "30"]
 
 
-def test_genotype_check_with_sample_ids_and_grch38(tmp_path):
+def test_genotype_check_needs_enough_variants(tmp_path):
+    """Fewer kept variants than GENOTYPE_MIN_VARIANTS (150 < 200): no calls."""
+    _rosmap_genotypes(tmp_path, _genotype_setup(tmp_path))
+    out = data_qc.run_check("genotype", [tmp_path / "qc.yaml"], output=tmp_path / "genotype",
+                            genotypes=tmp_path / "geno.tsv.gz", eqtls=tmp_path / "eqtls.tsv",
+                            id_map=tmp_path / "ids.csv")
+    s = pd.read_csv(out / "genotype_summary.tsv", sep="\t").iloc[0]
+    assert not s["calls_made"] and 0 < s["n_kept_variants"] <= GENO_EQTLS
+    assert s["n_no_data"] == GENO_DONORS
+
+
+def test_genotype_check_validation_tables(tmp_path, monkeypatch):
+    """The tables for checking the calls: matched-person sex, a second dataset
+    with the same samples (cross detail), a duplicated genotype sample
+    (kinship) and expected z / weak flags."""
+    monkeypatch.setattr(data_qc, "GENOTYPE_MIN_VARIANTS", 50)
+    _rosmap_genotypes(tmp_path, _genotype_setup(tmp_path), duplicate=90)
+    # Expression sex is the true person's (persons: p % 2 = male); recorded is the label's
+    true = np.arange(GENO_DONORS)
+    true[10], true[20], true[21] = 80, 21, 20
+    donor = [f"R{d:03d}" if d != 30 else "X030" for d in range(GENO_DONORS)]
+    pd.DataFrame({"donor": donor, "recorded": ["M" if d % 2 else "F" for d in range(GENO_DONORS)],
+                  "expression": ["M" if t % 2 else "F" for t in true]}).to_csv(
+        tmp_path / "qc" / "restricted" / "sex_by_donor.tsv", sep="\t", index=False)
+    # A second dataset with the same nuclei
+    shutil.copytree(tmp_path / "qc", tmp_path / "qc2")
+    qc2 = yaml.safe_load((tmp_path / "qc.yaml").read_text())
+    qc2["output_dir"] = str(tmp_path / "qc2")
+    (tmp_path / "qc2.yaml").write_text(yaml.safe_dump(qc2))
+
+    out = data_qc.run_check("genotype", [tmp_path / "qc.yaml", tmp_path / "qc2.yaml"],
+                            output=tmp_path / "genotype", genotypes=tmp_path / "geno.tsv.gz",
+                            eqtls=tmp_path / "eqtls.tsv", id_map=tmp_path / "ids.csv")
+    s = pd.read_csv(out / "genotype_summary.tsv", sep="\t").set_index("dataset")
+    assert s.loc["qc", "calls_made"] and s.loc["qc", "n_other_person"] == 3
+    sex = pd.read_csv(out / "genotype_matched_sex.tsv", sep="\t").set_index(["dataset", "call"])
+    assert sex.loc[("qc", "other person"), ["n", "n_matched_sex_known", "n_matched_sex_agrees"]].tolist() == [3, 3, 3]
+    assert sex.loc[("qc", "other person"), "n_label_sex_agrees"] == 1  # donor 10's person 80 has its sex
+    assert sex.loc[("qc", "identified"), "n_matched_sex_agrees"] == 1
+    own = sex.loc[("qc", "own genotype")]
+    assert own["n_label_sex_agrees"] == own["n_label_sex_known"] == own["n"]
+    kin = pd.read_csv(out / "genotype_kinship.tsv", sep="\t").iloc[0]
+    assert kin["n_samples"] == GENO_PERSONS + 1 and kin["n_pairs_duplicate"] == 1
+    pairs = pd.read_csv(out / "restricted" / "genotype_kinship_pairs.tsv", sep="\t", dtype=str)
+    assert {"MAP00000090", "ROS00000190"} <= set(pairs["sample_a"]) | set(pairs["sample_b"])
+    flagged = pd.read_csv(out / "genotype_kinship_flagged.tsv", sep="\t").set_index(["dataset", "call"])
+    assert flagged.loc[("qc", "other person"), "n_best_has_duplicate"] == 0
+    cross = pd.read_csv(out / "genotype_cross.tsv", sep="\t").iloc[0]
+    assert cross["n_same_genotype"] == cross["n_persons_identified_in_both"] == GENO_DONORS
+    assert cross["n_same_genotype_not_label"] == 3  # the same swapped samples in both
+    detail = pd.read_csv(out / "genotype_cross_detail.tsv", sep="\t").set_index(["dataset_a", "call_a", "call_b"])
+    row = detail.loc[("qc", "other person", "other person")]
+    assert row["n"] == row["n_b_same_best"] == row["n_b_z_at_best_a_ge6"] == 3
+    calls = pd.read_csv(out / "restricted" / "genotype_calls_qc.tsv", sep="\t").set_index("donor")
+    mine = calls[calls["call"] == "own genotype"]
+    assert mine["expected_z"].notna().all() and mine["strength"].between(0.4, 2.5).all()
+    assert {"next_z", "weak", "best_sex", "best_max_kinship", "label_best_kinship"} <= set(calls.columns)
+
+
+def test_genotype_check_with_sample_ids_and_grch38(tmp_path, monkeypatch):
     """PsychAD-style: the samples are named by the donors' match key and the
     variants by GRCh38 chr:pos (half by rsID); no ID map."""
+    monkeypatch.setattr(data_qc, "GENOTYPE_MIN_VARIANTS", 50)
     dosage = _genotype_setup(tmp_path)
     n_persons, k = GENO_PERSONS, GENO_EQTLS
     _write_dosages(tmp_path / "geno.tsv.gz", dosage, [f"rs{i}" if i % 2 else f"chr1:{5000 + i}" for i in range(k)],

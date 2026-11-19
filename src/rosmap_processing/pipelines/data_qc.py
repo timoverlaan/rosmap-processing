@@ -49,7 +49,7 @@ mismatches) go to <output>/restricted/ and are never logged.
 
 import json
 import time
-from itertools import combinations
+from itertools import combinations, permutations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
@@ -1259,6 +1259,12 @@ GENOTYPE_PCS = 10         # expression PCs removed per layer (at most one per 10
 GENOTYPE_MAX_P = 1e-3     # features kept: in-sample eQTL p at most this
 GENOTYPE_MIN_CPM = 5.0    # eQTL genes expressed at least this much in a layer
 GENOTYPE_MIN_DONORS = 30
+GENOTYPE_MIN_VARIANTS = 200  # no calls unless the kept features cover this many distinct variants
+GENOTYPE_EXPECTED_K = 20     # expected z: median own z of this many own-genotype donors nearest in nuclei
+GENOTYPE_WEAK = 0.65         # a confident call below this share of the expected z is flagged weak
+KINSHIP_DUPLICATE = 0.8      # genotype-sample kinship: the same person (or an identical twin)
+KINSHIP_FIRST = 0.35         # ... first-degree relatives
+KINSHIP_RELATIVE = 0.18      # ... second-degree relatives or closer
 # How a donor's label finds its genotype sample: "projid" maps the match key to
 # a projid through an ID map and reads the projid from the sample ID (ROSMAP);
 # "match" and "donor" take the match key or the donor ID as the sample ID itself
@@ -1417,6 +1423,50 @@ def _genotype_calls(Zs: np.ndarray, own: np.ndarray) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _genotype_kinship(Zall: np.ndarray):
+    """Kinship of every pair of genotype samples (samples x variants of
+    standardized dosage; missing = the mean): the mean product of their
+    dosages. About 1 for the same person or an identical twin, 0.5 for
+    first-degree and 0.25 for second-degree relatives, and 0 +- 1/sqrt(variants)
+    for unrelated people of one ancestry. Returns (kinship, n variants)."""
+    X = np.nan_to_num(Zall)
+    X = X[:, np.abs(X).sum(axis=0) > 0]
+    return X @ X.T / max(X.shape[1], 1), X.shape[1]
+
+
+def _expected_z(cells: np.ndarray, own_z: np.ndarray, reference: np.ndarray,
+                k: int = GENOTYPE_EXPECTED_K) -> np.ndarray:
+    """Per donor, the median own z of the k reference donors (own genotype)
+    nearest in log nuclei, the donor itself left out: about the z a sample of
+    the labelled person would get at this donor's nuclei count. Biased up at
+    the lowest counts, where weak samples of the right person fail the call."""
+    ref = np.flatnonzero(reference & np.isfinite(own_z))
+    out = np.full(len(cells), np.nan)
+    if len(ref) <= k:
+        return out
+    log_cells = np.log10(np.maximum(cells, 1))
+    for d in range(len(cells)):
+        cand = ref[ref != d]
+        near = cand[np.argsort(np.abs(log_cells[cand] - log_cells[d]), kind="stable")[:k]]
+        out[d] = np.median(own_z[near])
+    return out
+
+
+def _genotype_sample_sex(id_map: Optional[Union[str, Path]], sample_ids: str) -> pd.Series:
+    """Recorded sex (M/F) per genotype sample key from the ID map's msex
+    (ROSMAP clinical, 1 = male); empty without one."""
+    if sample_ids != "projid" or not id_map or "msex" not in pd.read_csv(id_map, nrows=0).columns:
+        return pd.Series(dtype=object)
+    table = pd.read_csv(id_map, dtype=str, usecols=["projid", "msex"]).dropna()
+    sex = pd.to_numeric(table["msex"], errors="coerce").map({1.0: "M", 0.0: "F"}).to_numpy()
+    out = pd.Series(sex, index=_projid(table["projid"])).dropna()
+    return out[~out.index.duplicated()]
+
+
+def _known_sex(values) -> np.ndarray:
+    return pd.Series(values, dtype=object).isin(["M", "F"]).to_numpy()
+
+
 def check_genotype(specs: List[Dict[str, Any]], output: Path, genotypes: Union[str, Path],
                    eqtls: Union[str, Path], id_map: Optional[Union[str, Path]] = None, build: int = 37,
                    sample_ids: str = "projid") -> Dict[str, pd.DataFrame]:
@@ -1426,7 +1476,16 @@ def check_genotype(specs: List[Dict[str, Any]], output: Path, genotypes: Union[s
     (Westra et al. 2011). build: of the chr:pos variant IDs (37 or 38).
     sample_ids (GENOTYPE_SAMPLE_IDS): "projid" with id_map, a CSV with
     individualID and projid (the match key -> the projid in the genotype sample
-    IDs); "match" or "donor" when that key is the genotype sample ID itself."""
+    IDs; its msex, if any, is the matched person's recorded sex); "match" or
+    "donor" when that key is the genotype sample ID itself.
+
+    Besides the calls, for checking them: each donor's expected z at its
+    nuclei count and the call's strength against it (weak below
+    GENOTYPE_WEAK); the matched person's recorded sex vs the donor's
+    expression sex; for a person in several datasets, the other dataset's call
+    and its z against the genotype matched here; and the kinship of the
+    genotype samples (duplicates, relatives). No calls for a dataset whose kept
+    features cover fewer than GENOTYPE_MIN_VARIANTS variants."""
     if sample_ids not in GENOTYPE_SAMPLE_IDS:
         raise ValueError(f"sample_ids must be one of {GENOTYPE_SAMPLE_IDS}, not {sample_ids!r}")
     variants, samples, dosage = read_genotypes(genotypes)
@@ -1448,8 +1507,34 @@ def check_genotype(specs: List[Dict[str, Any]], output: Path, genotypes: Union[s
     sample_index = pd.Series(np.arange(len(samples)), index=sample_pid)
     id_col = "projid" if sample_ids == "projid" else "sample"
     restricted = _restricted(output)
+    sample_sex = _genotype_sample_sex(id_map, sample_ids)
+
+    # Kinship of the genotype samples over the matched eQTL variants
+    K, n_kin_variants = _genotype_kinship(Zall[:, np.unique(eqtl["row"].to_numpy())])
+    pair = np.triu_indices(len(K), 1)
+    off = K[pair]
+    K_off = K.copy()
+    np.fill_diagonal(K_off, -np.inf)
+    max_kin = K_off.max(axis=1)
+    del K_off
+    kinship = pd.DataFrame([{
+        "n_samples": len(K), "n_variants": n_kin_variants, "median_self": float(np.median(np.diag(K))),
+        "median_pair": float(np.median(off)), "sd_pair_robust": float(1.4826 * np.median(np.abs(off - np.median(off)))),
+        "p99_9_pair": float(np.percentile(off, 99.9)), "max_pair": float(off.max()), "n_pairs": len(off),
+        "n_pairs_duplicate": int((off >= KINSHIP_DUPLICATE).sum()),
+        "n_pairs_first_degree": int(((off >= KINSHIP_FIRST) & (off < KINSHIP_DUPLICATE)).sum()),
+        "n_pairs_second_degree": int(((off >= KINSHIP_RELATIVE) & (off < KINSHIP_FIRST)).sum()),
+        "n_samples_with_relative": int((max_kin >= KINSHIP_RELATIVE).sum())}])
+    edges = np.round(np.arange(-0.2, 1.2001, 0.02), 2)
+    h, _ = np.histogram(np.clip(off, edges[0], edges[-1] - 1e-9), bins=edges)
+    kinship_hist = pd.DataFrame({"bin_left": edges[:-1], "bin_right": edges[1:], "n_pairs": h})
+    close = off >= KINSHIP_RELATIVE
+    pd.DataFrame({"sample_a": samples[pair[0][close]], "sample_b": samples[pair[1][close]],
+                  "kinship": off[close]}).to_csv(restricted / "genotype_kinship_pairs.tsv", sep="\t", index=False)
+    del off, pair
 
     summary, features, sex_rows, hist, by_person = [], [], [], [], {}
+    matched_sex, kin_flagged, per_dataset = [], [], {}
     for spec in specs:
         scan = Scan(spec)
         donors = scan.donors
@@ -1466,22 +1551,67 @@ def check_genotype(specs: List[Dict[str, Any]], output: Path, genotypes: Union[s
         gid = gid[~gid.index.duplicated()]
         pairs = eqtl[eqtl["gene_id"].isin(gid.index)].reset_index(drop=True)
         gene_cols = gid.loc[pairs["gene_id"]].to_numpy()
-        blocks, snp_rows, layer_of = [], [], []
+        blocks, snp_rows, gene_rows, layer_of = [], [], [], []
         for name, layer_donors, z, k in _genotype_layers(scan, gene_cols, spec):
             ok = np.flatnonzero(np.isfinite(z).any(axis=0))
             block = np.full((len(donors), len(ok)), np.nan)
             block[layer_donors] = z[:, ok]
             blocks.append(block)
             snp_rows.append(pairs["row"].to_numpy()[ok])
+            gene_rows.append(pairs["gene_id"].to_numpy()[ok])
             layer_of += [(name, k)] * len(ok)
         E = np.hstack(blocks)
-        Zf = Zall[:, np.concatenate(snp_rows)]
+        feature_rows = np.concatenate(snp_rows)
+        Zf = Zall[:, feature_rows]
         Zs, kept, r, n_f = _genotype_scores(E, Zf, own)
+        n_kept_variants = int(len(np.unique(feature_rows[kept])))
+        n_kept_genes = int(len(np.unique(np.concatenate(gene_rows)[kept])))
+        logger.info(f"[{scan.name}] kept features: {int(kept.sum())} of {len(kept)} "
+                    f"({n_kept_variants} variants, {n_kept_genes} genes)")
+        calls_made = n_kept_variants >= GENOTYPE_MIN_VARIANTS
+        if not calls_made:
+            logger.warning(f"[{scan.name}] the kept features cover {n_kept_variants} variants "
+                           f"(< {GENOTYPE_MIN_VARIANTS}): no calls")
+            Zs = np.full_like(Zs, np.nan)
         calls = _genotype_calls(Zs, own)
         calls.insert(0, "donor", donors["donor"].to_numpy())
         calls.insert(1, "match", match.to_numpy())
         calls.insert(2, "label_projid", label_pid)
         calls["best_projid"] = np.where(calls["best"] >= 0, sample_pid[np.maximum(calls["best"], 0)], "")
+
+        # Strength against the z expected at the donor's nuclei count
+        cells = np.bincount(scan.groups["donor"].to_numpy(), weights=scan.groups["n_cells"].to_numpy(),
+                            minlength=len(donors))
+        calls["n_nuclei"] = cells.astype(np.int64)
+        calls["expected_z"] = _expected_z(cells, calls["own_z"].to_numpy(dtype=float),
+                                          (calls["call"] == "own genotype").to_numpy())
+        with np.errstate(invalid="ignore", divide="ignore"):
+            calls["strength"] = calls["best_z"] / calls["expected_z"]
+        confident = calls["call"].isin(["own genotype", "other person", "identified"])
+        calls["weak"] = confident & (calls["strength"] < GENOTYPE_WEAK)
+
+        # Sex: the donor's expression sex vs the label's and the matched person's record
+        sex_path = Path(spec["output_dir"]) / "restricted" / "sex_by_donor.tsv"
+        expression_sex = recorded = np.full(len(donors), np.nan, dtype=object)
+        if sex_path.exists():
+            sex = pd.read_csv(sex_path, sep="\t", dtype={"donor": str}).drop_duplicates("donor").set_index("donor")
+            sex = sex.reindex(donors["donor"].astype(str).to_numpy())
+            expression_sex = sex["expression"].to_numpy(dtype=object)
+            recorded = sex["recorded"].to_numpy(dtype=object)
+        local = pd.Series(recorded, index=label_pid)
+        local = local[(local.index != "") & _known_sex(recorded)]
+        local = local[~local.index.duplicated()]
+        person_sex = pd.concat([sample_sex, local[~local.index.isin(sample_sex.index)]])
+        calls["expression_sex"] = expression_sex
+        calls["label_sex"] = recorded
+        calls["best_sex"] = calls["best_projid"].map(person_sex).to_numpy(dtype=object)
+
+        # Kinship of the matched sample to anyone, and to the label's sample
+        best = calls["best"].to_numpy()
+        calls["best_max_kinship"] = np.where(best >= 0, max_kin[np.maximum(best, 0)], np.nan)
+        other_best = (own >= 0) & (best >= 0) & (best != own)
+        calls["label_best_kinship"] = np.where(other_best, K[np.maximum(own, 0), np.maximum(best, 0)], np.nan)
+
         # A best match that is another donor of this dataset: a swap or a duplicate label
         in_data = pd.Series(np.arange(len(donors)), index=label_pid)
         in_data = in_data[(in_data.index != "") & ~in_data.index.duplicated()]
@@ -1493,24 +1623,29 @@ def check_genotype(specs: List[Dict[str, Any]], output: Path, genotypes: Union[s
         for i in np.flatnonzero(hit.to_numpy()):
             j = in_data.loc[calls.at[i, "best_projid"]]
             mutual += int(calls.at[j, "best_projid"] == label_pid[i] and calls.at[j, "call"] == "other person")
-        confident = calls["call"].isin(["own genotype", "other person", "identified"])
         same_twice = int(calls.loc[confident, "best_projid"].duplicated(keep=False).sum())
-        calls.drop(columns="best").rename(columns={"label_projid": f"label_{id_col}", "best_projid": f"best_{id_col}"}) \
-            .to_csv(restricted / f"genotype_calls_{scan.name}.tsv", sep="\t", index=False)
-        for m, pid, c in zip(match, calls["best_projid"], calls["call"]):
+        renamed = {"label_projid": f"label_{id_col}", "best_projid": f"best_{id_col}"}
+        calls.drop(columns="best").rename(columns=renamed).to_csv(
+            restricted / f"genotype_calls_{scan.name}.tsv", sep="\t", index=False)
+        for m, pid, lab, c in zip(match, calls["best_projid"], label_pid, calls["call"]):
             if isinstance(m, str) and c in ("own genotype", "other person", "identified"):
-                by_person.setdefault(m, {})[scan.name] = pid
+                by_person.setdefault(m, {})[scan.name] = (pid, lab)
+        per_dataset[scan.name] = {"match": _as_ids(match), "calls": calls, "Zs": Zs}
 
         labelled = own >= 0
         matched = calls["call"] == "own genotype"
         other_z = np.where(calls["best"] == own, calls["next_z"], calls["best_z"])
         counts = calls["call"].value_counts()
+        own_z = calls.loc[labelled, "own_z"].to_numpy(dtype=float)
         row = {"dataset": scan.name, "n_donors": len(donors), "n_genotyped_label": int(labelled.sum()),
                "n_features": int(E.shape[1]), "n_features_kept": int(kept.sum()),
+               "n_kept_variants": n_kept_variants, "n_kept_genes": n_kept_genes, "calls_made": calls_made,
                "n_eqtl_pairs": len(pairs), "n_genotype_samples": len(samples),
-               "median_own_z": float(np.nanmedian(calls.loc[labelled, "own_z"])) if labelled.any() else np.nan}
+               "median_own_z": float(np.median(own_z[np.isfinite(own_z)])) if np.isfinite(own_z).any() else np.nan}
         for c in ("own genotype", "other person", "unclear", "no signal", "no data", "identified", "not genotyped"):
             row[f"n_{c.replace(' ', '_')}"] = int(counts.get(c, 0))
+        row["n_own_genotype_weak"] = int((matched & calls["weak"]).sum())
+        row["n_other_or_identified_weak"] = int((other & calls["weak"]).sum())
         row["n_other_person_in_dataset"] = int((hit & (calls["call"] == "other person")).sum())
         row["n_mutual_swaps"] = mutual // 2
         row["n_same_person_twice"] = same_twice
@@ -1528,37 +1663,108 @@ def check_genotype(specs: List[Dict[str, Any]], output: Path, genotypes: Union[s
                              else np.nan})
         edges = np.arange(-10, 60.5, 1.0)
         for measure, values in (("own_z", calls.loc[labelled, "own_z"].to_numpy()),
-                                ("best_other_z", other_z[labelled.astype(bool)])):
+                                ("best_other_z", other_z[labelled.astype(bool)]),
+                                ("best_z_unlabelled", calls.loc[~labelled, "best_z"].to_numpy())):
+            values = np.asarray(values, dtype=float)
             v = np.clip(values[np.isfinite(values)], edges[0], edges[-1] - 1e-9)
             h, _ = np.histogram(v, bins=edges)
             hist += [{"dataset": scan.name, "measure": measure, "bin_left": float(lo), "bin_right": float(hi),
                       "n_donors": int(k)} for lo, hi, k in zip(edges[:-1], edges[1:], h)]
 
-        sex_path = Path(spec["output_dir"]) / "restricted" / "sex_by_donor.tsv"
         if sex_path.exists():
-            sex = pd.read_csv(sex_path, sep="\t", dtype={"donor": str})
-            off = (sex["expression"].isin(["M", "F"]) & sex["recorded"].isin(["M", "F"])
-                   & (sex["expression"] != sex["recorded"])).to_numpy()
-            amb = (sex["expression"] == "ambiguous").to_numpy()
-            for what, mask in (("expression sex differs from the record", off), ("expression sex ambiguous", amb)):
+            off_sex = _known_sex(expression_sex) & _known_sex(recorded) & (expression_sex != recorded)
+            amb = (pd.Series(expression_sex, dtype=object) == "ambiguous").to_numpy()
+            for what, mask in (("expression sex differs from the record", off_sex), ("expression sex ambiguous", amb)):
                 vc = calls.loc[mask, "call"].value_counts()
                 sex_rows.append({"dataset": scan.name, "donors": what, "n": int(mask.sum()),
                                  **{f"n_{c.replace(' ', '_')}": int(vc.get(c, 0)) for c in
                                     ("own genotype", "other person", "unclear", "no signal", "identified",
                                      "not genotyped")}})
+        for call in ("own genotype", "other person", "identified"):
+            sel = (calls["call"] == call).to_numpy()
+            ex, lab, bs = expression_sex[sel], recorded[sel], calls["best_sex"].to_numpy()[sel]
+            lab_known = _known_sex(ex) & _known_sex(lab)
+            best_known = _known_sex(ex) & _known_sex(bs)
+            matched_sex.append({"dataset": scan.name, "call": call, "n": int(sel.sum()),
+                                "n_expression_sex_known": int(_known_sex(ex).sum()),
+                                "n_label_sex_known": int(lab_known.sum()),
+                                "n_label_sex_agrees": int((lab_known & (ex == lab)).sum()),
+                                "n_matched_sex_known": int(best_known.sum()),
+                                "n_matched_sex_agrees": int((best_known & (ex == bs)).sum())})
+        for call in ("other person", "identified"):
+            sel = calls["call"] == call
+            kin_best, kin_label = calls.loc[sel, "best_max_kinship"], calls.loc[sel, "label_best_kinship"]
+            kin_flagged.append({"dataset": scan.name, "call": call, "n": int(sel.sum()),
+                                "n_best_has_duplicate": int((kin_best >= KINSHIP_DUPLICATE).sum()),
+                                "n_best_has_relative": int(((kin_best >= KINSHIP_RELATIVE)
+                                                            & (kin_best < KINSHIP_DUPLICATE)).sum()),
+                                "n_label_related_to_best": int((kin_label >= KINSHIP_RELATIVE).sum())})
         logger.info(f"[{scan.name}] genotype calls: {counts.to_dict()}")
 
+    names = [s["name"] for s in specs]
     cross = []
-    for a, b in combinations([s["name"] for s in specs], 2):
+    for a, b in combinations(names, 2):
         both = [(p[a], p[b]) for p in by_person.values() if a in p and b in p]
         cross.append({"dataset_a": a, "dataset_b": b, "n_persons_identified_in_both": len(both),
-                      "n_same_genotype": sum(x == y for x, y in both)})
+                      "n_same_genotype": sum(x[0] == y[0] for x, y in both),
+                      "n_same_genotype_label": sum(x[0] == y[0] == x[1] for x, y in both),
+                      "n_same_genotype_not_label": sum(x[0] == y[0] != x[1] != "" for x, y in both)})
+    cross_detail = _genotype_cross_detail(per_dataset, names, restricted)
     out = {"genotype_summary": pd.DataFrame(summary), "genotype_features": pd.DataFrame(features),
-           "genotype_sex": pd.DataFrame(sex_rows), "genotype_cross": pd.DataFrame(cross),
-           "genotype_histograms": pd.DataFrame(hist)}
-    for name in ("genotype_summary", "genotype_features", "genotype_sex", "genotype_cross"):
+           "genotype_sex": pd.DataFrame(sex_rows), "genotype_matched_sex": pd.DataFrame(matched_sex),
+           "genotype_cross": pd.DataFrame(cross), "genotype_cross_detail": cross_detail,
+           "genotype_kinship": kinship, "genotype_kinship_histogram": kinship_hist,
+           "genotype_kinship_flagged": pd.DataFrame(kin_flagged), "genotype_histograms": pd.DataFrame(hist)}
+    for name in ("genotype_summary", "genotype_features", "genotype_sex", "genotype_matched_sex", "genotype_cross",
+                 "genotype_cross_detail", "genotype_kinship", "genotype_kinship_flagged"):
         _log_table("all", name, out[name])
     return out
+
+
+GENOTYPE_CROSS_GROUPS = ("other person", "identified", "unclear", "no signal", "own genotype (weak)")
+
+
+def _genotype_cross_detail(per_dataset: Dict[str, Dict[str, Any]], names: List[str],
+                           restricted: Path) -> pd.DataFrame:
+    """For donors of dataset A whose call needs checking (GENOTYPE_CROSS_GROUPS)
+    and whose person is also in dataset B: B's call, and B's z against the
+    genotype sample A matched. A other person while B matches its own label:
+    the RNA in A is the wrong one. Both matching the same non-label sample: the
+    label's genotype or ID map is wrong, not the RNA. A weak match that B
+    reproduces at a similar z: a relative of the label rather than a mixture."""
+    rows = []
+    for a, b in permutations(names, 2):
+        A, B = per_dataset[a], per_dataset[b]
+        ca, cb = A["calls"], B["calls"]
+        b_of = pd.Series(np.arange(len(B["match"])), index=B["match"])
+        b_of = b_of[(b_of.index != "") & ~b_of.index.duplicated()]
+        group = np.where((ca["call"] == "own genotype") & ca["weak"], "own genotype (weak)", ca["call"])
+        for i in np.flatnonzero(pd.Series(group).isin(GENOTYPE_CROSS_GROUPS).to_numpy()):
+            m = A["match"][i]
+            if m not in b_of.index:
+                continue
+            j = int(b_of[m])
+            best_a = int(ca["best"].iat[i])
+            b_confident = cb["call"].iat[j] in ("own genotype", "other person", "identified")
+            rows.append({"dataset_a": a, "donor_a": ca["donor"].iat[i], "call_a": group[i],
+                         "best_a": ca["best_projid"].iat[i], "best_z_a": ca["best_z"].iat[i],
+                         "dataset_b": b, "donor_b": cb["donor"].iat[j], "call_b": cb["call"].iat[j],
+                         "best_b": cb["best_projid"].iat[j], "own_z_b": cb["own_z"].iat[j],
+                         "z_b_at_best_a": float(B["Zs"][j, best_a]) if best_a >= 0 else np.nan,
+                         "b_same_best": bool(b_confident and cb["best_projid"].iat[j] == ca["best_projid"].iat[i])})
+    columns = ["dataset_a", "call_a", "dataset_b", "call_b", "n", "n_b_same_best", "n_b_z_at_best_a_ge6",
+               "median_z_b_at_best_a", "median_best_z_a", "median_own_z_b"]
+    detail = pd.DataFrame(rows, columns=["dataset_a", "donor_a", "call_a", "best_a", "best_z_a", "dataset_b",
+                                         "donor_b", "call_b", "best_b", "own_z_b", "z_b_at_best_a", "b_same_best"])
+    detail.to_csv(restricted / "genotype_cross_by_donor.tsv", sep="\t", index=False)
+    if detail.empty:
+        return pd.DataFrame(columns=columns)
+    detail["z_ge6"] = detail["z_b_at_best_a"] >= GENOTYPE_Z
+    out = detail.groupby(["dataset_a", "call_a", "dataset_b", "call_b"], sort=True).agg(
+        n=("donor_a", "size"), n_b_same_best=("b_same_best", "sum"), n_b_z_at_best_a_ge6=("z_ge6", "sum"),
+        median_z_b_at_best_a=("z_b_at_best_a", "median"), median_best_z_a=("best_z_a", "median"),
+        median_own_z_b=("own_z_b", "median")).reset_index()
+    return out[columns]
 
 
 # ---------------------------------------------------------------- entry point
