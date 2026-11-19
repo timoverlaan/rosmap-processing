@@ -25,5 +25,5 @@ case "$name" in
     *) echo "usage: sbatch slurm/fetch_wgs.sh amp1|divco [script arguments]"; exit 1 ;;
 esac
 shift
-in_container pixi run python scripts/fetch_wgs_sites.py "$folder" "$REF/gtex_cortex_eqtls.tsv" \
+in_container pixi run python -u scripts/fetch_wgs_sites.py "$folder" "$REF/gtex_cortex_eqtls.tsv" \
     "$V2/genotypes/restricted/wgs_${name}_eqtl_dosages.tsv.gz" --build "$build" "$@"
