@@ -435,7 +435,14 @@ for checking that, without donor IDs:
   person, 0.5 first-degree, 0.25 second-degree), its histogram, and whether
   the samples matched by `other person` / `identified` calls have a duplicate
   or a relative in the genotype set. `genotype_histograms` also bins the best z
-  of donors without a genotyped label.
+  of donors without a genotyped label. The dosages are standardized over the
+  whole genotype set, so in a set of mixed ancestry (PsychAD: about a quarter
+  African ancestry) pairs within a minority ancestry look related (a shoulder
+  at 0.12-0.42) and wrong-person z run higher (PsychAD's maximum among
+  own-genotype donors is 7.4, against 5.0 for ROSMAP's array set). There only
+  the duplicate count is reliable; relative counts would need ancestry-aware
+  frequencies or a KING-robust estimator, and a match just above z 6 is weak
+  evidence.
 
 Per-donor values (`expected_z`, `strength`, `weak`, `next_z`, the sexes,
 kinships, cross-dataset rows, related genotype pairs) are in `restricted/`.
