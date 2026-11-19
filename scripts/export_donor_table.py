@@ -64,7 +64,8 @@ def main() -> None:
 
     actions = pd.read_csv(args.actions, sep="\t", dtype=str, keep_default_na=False)
     actions = actions[actions["dataset"] == args.dataset].drop_duplicates("donor").set_index("donor")
-    for c in GENOTYPE_COLUMNS:
+    per_source = [c for c in actions.columns if c.endswith("_call") or c.endswith("_reason")]
+    for c in GENOTYPE_COLUMNS + ["decided_by"] + per_source:
         table[f"genotype_{c}"] = table["donor"].map(actions[c]) if c in actions else np.nan
     table["genotype_checked"] = table["donor"].isin(actions.index)
     args.output.parent.mkdir(parents=True, exist_ok=True)

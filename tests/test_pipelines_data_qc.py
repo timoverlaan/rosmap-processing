@@ -316,7 +316,7 @@ def test_genotype_actions(tmp_path, monkeypatch):
     assert actions.loc["R020", ["action", "relabel_to", "relabel_to_individualID"]].tolist() == \
         ["relabel", "21", "R021"]
     assert actions.loc["R021", ["action", "relabel_to"]].tolist() == ["relabel", "20"]
-    assert "shifted" in actions.loc["R020", "motivation"]
+    assert "mutual swap" in actions.loc["R020", "motivation"]
     assert actions.loc["R010", ["action", "reason"]].tolist() == ["drop", "unconfirmed"]
     assert actions.loc["X030", "action"] == "drop"
     assert (actions.drop(index=["R010", "R020", "R021", "X030"])["action"] == "keep").all()
@@ -394,3 +394,45 @@ def test_genotype_check_with_sample_ids_and_grch38(tmp_path, monkeypatch):
     # GRCh37 positions find only the rsID-named half
     out = data_qc.run_check("genotype", [tmp_path / "qc.yaml"], output=tmp_path / "genotype37", **kwargs)
     assert pd.read_csv(out / "genotype_summary.tsv", sep="\t").iloc[0]["n_eqtl_pairs"] == k // 2
+
+
+def test_genotype_actions_with_wgs(tmp_path, monkeypatch):
+    """Array and WGS combined. The array has persons 40 and 41's DNA swapped
+    (WGS is right): their donors are kept. Donor 10's sample is person 80, of
+    the same sex: unconfirmed by either source alone, confirmed by both
+    matching 80. Donors 20 and 21 are a mutual swap."""
+    monkeypatch.setattr(data_qc, "GENOTYPE_MIN_VARIANTS", 50)
+    dosage = _genotype_setup(tmp_path)
+    _write_sex_by_donor(tmp_path / "qc")
+    array = dosage.copy()
+    array[[40, 41]] = array[[41, 40]]
+    _rosmap_genotypes(tmp_path, array)
+    arr = data_qc.run_check("genotype", [tmp_path / "qc.yaml"], output=tmp_path / "array",
+                            genotypes=tmp_path / "geno.tsv.gz", eqtls=tmp_path / "eqtls.tsv",
+                            id_map=tmp_path / "ids.csv")
+    _write_dosages(tmp_path / "wgs.tsv.gz", dosage, [f"chr1:{1000 + i}" for i in range(GENO_EQTLS)],
+                   [f"R{p:03d}" for p in range(GENO_PERSONS)])
+    wgs = data_qc.run_check("genotype", [tmp_path / "qc.yaml"], output=tmp_path / "wgs",
+                            genotypes=tmp_path / "wgs.tsv.gz", eqtls=tmp_path / "eqtls.tsv", sample_ids="match")
+    status = tmp_path / "avw" / "restricted"
+    status.mkdir(parents=True)
+    pd.DataFrame({"projid": [str(p) for p in range(GENO_PERSONS)],
+                  "status": ["matches another person's WGS" if p in (40, 41) else "same person"
+                             for p in range(GENO_PERSONS)]}).to_csv(status / "array_vs_wgs_by_person.tsv",
+                                                                     sep="\t", index=False)
+    _genotype_actions(monkeypatch, arr, "--wgs", f"wgs={wgs}", "--array-vs-wgs", tmp_path / "avw",
+                      "--id-map", tmp_path / "ids.csv", "--output", tmp_path / "actions")
+    a = pd.read_csv(tmp_path / "actions" / "restricted" / "genotype_actions.tsv", sep="\t", dtype=str,
+                    keep_default_na=False).set_index("donor")
+    for d in ("R040", "R041"):
+        assert a.loc[d, ["action", "reason", "identity"]].tolist() == ["keep", "own genotype, array entry wrong",
+                                                                       "verified"]
+    assert a.loc["R010", ["action", "reason", "relabel_to_individualID"]].tolist() == \
+        ["relabel", "confirmed by two genotype sources", "R080"]
+    assert a.loc["R020", ["action", "relabel_to_individualID"]].tolist() == ["relabel", "R021"]
+    assert a.loc["R021", ["action", "relabel_to_individualID"]].tolist() == ["relabel", "R020"]
+    assert "mutual swap" in a.loc["R020", "motivation"]
+    assert a.loc["X030", "action"] == "drop"
+    rest = a.drop(index=["R010", "R020", "R021", "X030", "R040", "R041"])
+    assert (rest["action"] == "keep").all() and (rest["identity"] == "verified").all()
+    assert {"array_call", "wgs_call", "decided_by"} <= set(a.columns)

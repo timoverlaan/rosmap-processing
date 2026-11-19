@@ -8,9 +8,23 @@ restricted) and OUTPUT/genotype_actions_summary.tsv (counts per dataset,
 action and reason; no IDs). Prints only the summary.
 
     python scripts/genotype_actions.py data/v2/qc/genotype_v2 data/v2/qc/genotype_psychad \
+        --wgs amp1_wgs=data/v2/qc/genotype_wgs/check_amp1 divco_wgs=data/v2/qc/genotype_wgs/check_divco \
+        --array-vs-wgs data/v2/qc/genotype_wgs/amp1 data/v2/qc/genotype_wgs/divco \
         --id-map data/v2/download/ROSMAP/ROSMAP_clinical.csv --output data/v2/qc/genotype_actions
 
-Rules (a sample "matches" a genotype when the check calls it so):
+Each genotype source (the positional folders: array or a cohort's own
+genotypes; --wgs: the same check against WGS) gives a decision per donor by
+the rules below; `combine` then merges a donor's decisions: a full-strength
+own-genotype match in any source keeps the label (if another source finds a
+swap, the WGS wins only where the array entry under the label is shown wrong
+by WGS, else the donor is dropped); a relabel needs its sources to agree on
+the person, and a swap unconfirmed in one source is confirmed when another
+source that genotypes the label matches the same person; otherwise the most
+specific drop, else the best-supported keep. Sources where the label has no
+genotype and nothing matches are ignored. A mutual swap (two donors each
+holding the other's sample) counts as evidence for an RNA swap.
+
+Rules per source (a sample "matches" a genotype when the check calls it so):
 - own genotype -> keep (a weak match or a sex record that disagrees is noted).
 - unclear -> keep if the label is still the best match (identity probable),
   else drop (identity ambiguous).
@@ -201,8 +215,12 @@ def decide(r: dict, partner: dict, cross_rows: list, target: str):
                     f"match.")
         chain = ""
         if partner is not None:
-            chain = (f" The donor labelled as {target} in this dataset ({partner['donor']}) holds a sample of "
-                     f"someone else (called {partner['call']}), so the labels are shifted.")
+            if partner["call"] == "other person" and partner["best"] == r["label"] and r["label"]:
+                pro.append(f"the donor labelled as {target} ({partner['donor']}) holds a sample of this donor's "
+                           f"labelled person: a mutual swap")
+            else:
+                chain = (f" The donor labelled as {target} in this dataset ({partner['donor']}) holds a sample of "
+                         f"someone else (called {partner['call']}), so the labels are shifted.")
         if pro:
             label_part = (f" and its label's genotype at z {_f(own_z)}" if np.isfinite(own_z) else
                           " (its label has no genotype)")
@@ -221,9 +239,131 @@ def decide(r: dict, partner: dict, cross_rows: list, target: str):
     return "keep", call, "unchecked", "no genotype to check" if call == "not genotyped" else "no expression data"
 
 
+IDENTITY_RANK = {"verified": 0, "probable": 1, "unverified": 2, "unchecked": 3}
+DROP_RANK = ["contradicted", "genotype sources disagree", "no signal despite nuclei", "second sample of a donor",
+             "unconfirmed", "unclear, ambiguous", "weak match"]
+LABELLED = ("own genotype", "other person", "unclear", "no signal")  # the label has a genotype in the source
+
+
+def source_decisions(folder: Path, source: str, to_iid: dict):
+    """{(dataset, donor): decision of this source} for one genotype-check folder."""
+    out = {}
+    calls, cross = read_folder(folder)
+    for name, table in calls.items():
+        by_label = {lab: r for r in table.to_dict("records") if (lab := r["label"])}
+        by_donor = {r["donor"]: r for r in table.to_dict("records")}
+        for r in table.to_dict("records"):
+            partner = by_donor.get(r["best_is_donor"]) if r["best_is_donor"] else None
+            if partner is None and r["best"] in by_label and r["best"] != r["label"]:
+                partner = by_label[r["best"]]
+            best_iid = to_iid.get(r["best"], "") if r["kind"] == "projid" else r["best"]
+            target = (f"{best_iid or 'an unmapped individualID'} (projid {r['best']})" if r["kind"] == "projid"
+                      else r["best"])
+            action, reason, identity, motivation = decide(r, partner, cross.get((name, r["donor"]), []), target)
+            out[(name, r["donor"])] = {"source": source, "r": r, "action": action, "reason": reason,
+                                       "identity": identity, "motivation": motivation, "best_iid": best_iid,
+                                       "target": target}
+    return out
+
+
+def combine(decisions: list, array_status: dict):
+    """One donor's final (action, reason, identity, motivation, deciding decision)
+    from the decisions of its genotype sources (array first, then WGS).
+
+    - A full-strength own-genotype match in any source verifies the label,
+      unless another source finds a swap or a second sample: then the WGS wins
+      when the array genotype under the label is someone else's (array vs
+      WGS), else the sources disagree and the donor is dropped.
+    - A relabel needs every relabelling source to name the same person; a
+      swap that one source leaves unconfirmed is confirmed when another
+      source, in which the label is genotyped, matches the same person.
+    - Otherwise the most specific drop wins, else the best-supported keep."""
+    if len(decisions) == 1:
+        d = decisions[0]
+        return d["action"], d["reason"], d["identity"], d["motivation"], d
+    tag = lambda d: f"[{d['source']}] "  # noqa: E731
+
+    def text(ds):
+        return " ".join(tag(d) + (d["motivation"] or f"{d['r']['call']}.") for d in ds)
+
+    own = [d for d in decisions if d["reason"] in ("own genotype", "own genotype, weak", "own genotype, sex record")]
+    full_own = [d for d in own if d["reason"] != "own genotype, weak"]
+    swaps = [d for d in decisions if d["action"] == "relabel" or d["reason"] == "second sample of a donor"]
+    if full_own or (own and not swaps):
+        chosen = (full_own or own)[0]
+        if swaps and len(full_own) >= 2 and len(swaps) == 1:
+            return ("keep", chosen["reason"], "verified",
+                    f"{', '.join(d['source'] for d in full_own)} match its own genotype; only "
+                    f"{tag(swaps[0])}disagrees: {swaps[0]['motivation']}", chosen)
+        if swaps:
+            wgs_own = [d for d in full_own if d["source"] != "array"]
+            array_swaps = [d for d in swaps if d["source"] == "array"]
+            status = array_status.get(_projid(array_swaps[0]["r"]["label"])) if array_swaps else None
+            if wgs_own and len(array_swaps) == len(swaps) and status and status != "same person":
+                return ("keep", "own genotype, array entry wrong", "verified",
+                        f"{tag(wgs_own[0])}matches its own genotype (z {_f(wgs_own[0]['r']['own_z'])}). "
+                        f"{tag(array_swaps[0])}{array_swaps[0]['motivation']} But the array genotype under this "
+                        f"label is not this person's own (array vs WGS: {status}): the array entry is wrong, "
+                        f"not the RNA.", wgs_own[0])
+            return ("drop", "genotype sources disagree", "uncertain",
+                    f"The sources disagree on who this is: {text(own + swaps)}", chosen)
+        notes = [tag(d) + d["motivation"] for d in decisions if d is not chosen and d["action"] != "keep"]
+        reason = chosen["reason"]
+        if any(d["source"] == "array" and d["action"] != "keep" for d in decisions):
+            status = array_status.get(_projid(decisions[0]["r"]["label"]))
+            if status and status not in ("same person", "no WGS"):
+                notes.append(f"the array genotype under this label is not this person's (array vs WGS: {status}), "
+                             f"so the array's mismatch is an error on the array side")
+                reason = "own genotype, array entry wrong"
+        others = [d["source"] for d in decisions if d is not chosen and d["reason"].startswith("own genotype")]
+        motivation = "; ".join(filter(None, [
+            chosen["motivation"],
+            f"confirmed by {', '.join(others)}" if others else "",
+            ("other sources: " + " ".join(notes)) if notes else ""]))
+        return "keep", reason, "verified", motivation, chosen
+
+    relabels = [d for d in decisions if d["action"] == "relabel"]
+    if relabels:
+        targets = {d["best_iid"] or d["r"]["best"] for d in relabels}
+        others = [d for d in decisions if d["reason"] in ("contradicted", "second sample of a donor")]
+        if len(targets) == 1 and not others:
+            d = relabels[0]
+            agree = [x["source"] for x in decisions if x is not d and x["r"]["call"] in ("other person", "identified")
+                     and (x["best_iid"] or x["r"]["best"]) in targets]
+            return ("relabel", d["reason"], "wrong",
+                    d["motivation"] + (f" {', '.join(agree)} matches the same person." if agree else ""), d)
+        return ("drop", "genotype sources disagree", "uncertain",
+                f"The sources disagree on who this is: {text(relabels + others)}", relabels[0])
+
+    # A swap left unconfirmed in one source is confirmed by another source that
+    # genotypes the label and matches the same person
+    matched = [d for d in decisions if d["r"]["call"] in ("other person", "identified") and not d["r"]["weak"]]
+    labelled = [d for d in matched if d["r"]["call"] == "other person"]
+    seconds = [d for d in decisions if d["reason"] == "second sample of a donor"]
+    if not seconds and len(matched) >= 2 and labelled and len({d["best_iid"] or d["r"]["best"] for d in matched}) == 1 \
+            and not any(d["reason"] == "contradicted" for d in decisions):
+        d = labelled[0]
+        return ("relabel", "confirmed by two genotype sources", "wrong",
+                f"{text(matched)} Two genotype sources match the sample to the same person, and the label's own "
+                f"genotype does not match it, so the RNA is that person's.", d)
+
+    drops = [d for d in decisions if d["action"] == "drop"]
+    if drops:
+        drops.sort(key=lambda d: DROP_RANK.index(d["reason"]) if d["reason"] in DROP_RANK else len(DROP_RANK))
+        d = drops[0]
+        return "drop", d["reason"], d["identity"], text(drops), d
+    keeps = sorted(decisions, key=lambda d: IDENTITY_RANK.get(d["identity"], 9))
+    d = keeps[0]
+    return "keep", d["reason"], d["identity"], text([x for x in keeps if x["motivation"]]), d
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("folders", type=Path, nargs="+", help="genotype-check output folders")
+    parser.add_argument("folders", type=Path, nargs="+", help="genotype-check output folders (array or own genotypes)")
+    parser.add_argument("--wgs", nargs="*", default=[], metavar="NAME=FOLDER",
+                        help="genotype-check folders run against WGS (labels by individualID), as name=folder")
+    parser.add_argument("--array-vs-wgs", type=Path, nargs="*", default=[],
+                        help="scripts/genotype_wgs_check.py output folders (array vs WGS per person)")
     parser.add_argument("--id-map", type=Path, help="CSV with individualID and projid (for projid labels)")
     parser.add_argument("--output", type=Path, help="default: the first folder")
     args = parser.parse_args()
@@ -233,36 +373,47 @@ def main() -> None:
         ids = pd.read_csv(args.id_map, dtype=str, usecols=["individualID", "projid"]).dropna()
         for iid, pid in zip(ids["individualID"], ids["projid"]):
             to_iid.setdefault(_projid(pid), iid)
+    array_status = {}
+    for folder in args.array_vs_wgs:
+        path = folder / "restricted" / "array_vs_wgs_by_person.tsv"
+        for r in pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False).to_dict("records"):
+            if r["status"] != "no WGS" or r["projid"] not in array_status:
+                array_status[r["projid"]] = r["status"]
+
+    sources = [("array", f) for f in args.folders] + [tuple(s.split("=", 1)) for s in args.wgs]
+    per_donor = defaultdict(list)
+    for source, folder in sources:
+        for key, d in source_decisions(Path(folder), source, to_iid).items():
+            per_donor[key].append(d)
 
     rows = []
-    for folder in args.folders:
-        calls, cross = read_folder(folder)
-        for name, table in calls.items():
-            by_label = {lab: r for r in table.to_dict("records") if (lab := r["label"])}
-            by_donor = {r["donor"]: r for r in table.to_dict("records")}
-            for r in table.to_dict("records"):
-                partner = by_donor.get(r["best_is_donor"]) if r["best_is_donor"] else None
-                if partner is None and r["best"] in by_label and r["best"] != r["label"]:
-                    partner = by_label[r["best"]]
-                best_iid = to_iid.get(r["best"], "") if r["kind"] == "projid" else r["best"]
-                target = (f"{best_iid or 'an unmapped individualID'} (projid {r['best']})" if r["kind"] == "projid"
-                          else r["best"])
-                action, reason, identity, motivation = decide(r, partner, cross.get((name, r["donor"]), []), target)
-                rows.append({"dataset": name, "donor": r["donor"], "match": r["match"], "label": r["label"],
-                             "call": r["call"], "action": action, "reason": reason, "identity": identity,
-                             "relabel_to": r["best"] if action == "relabel" else "",
-                             "relabel_to_individualID": best_iid if action == "relabel" else "",
-                             "motivation": motivation, "own_z": r["own_z"], "best_z": r["best_z"],
-                             "next_z": r["next_z"], "expected_z": r["expected_z"], "strength": r["strength"],
-                             "n_nuclei": r["n_nuclei"], "expression_sex": r["expression_sex"],
-                             "label_sex": r["label_sex"], "best_sex": r["best_sex"], "best": r["best"],
-                             "best_is_donor": r["best_is_donor"]})
+    for (name, donor), decisions in per_donor.items():
+        # A source in which the label has no genotype and nothing matches adds nothing
+        useful = [d for d in decisions if d["r"]["call"] not in ("not genotyped", "no data")] or decisions[:1]
+        action, reason, identity, motivation, d = combine(useful, array_status)
+        r = d["r"]
+        row = {"dataset": name, "donor": donor, "match": r["match"], "label": decisions[0]["r"]["label"],
+               "call": r["call"], "action": action, "reason": reason, "identity": identity,
+               "relabel_to": r["best"] if action == "relabel" else "",
+               "relabel_to_individualID": d["best_iid"] if action == "relabel" else "",
+               "decided_by": d["source"], "motivation": motivation, "own_z": r["own_z"], "best_z": r["best_z"],
+               "next_z": r["next_z"], "expected_z": r["expected_z"], "strength": r["strength"],
+               "n_nuclei": r["n_nuclei"], "expression_sex": r["expression_sex"], "label_sex": r["label_sex"],
+               "best_sex": r["best_sex"], "best": r["best"], "best_is_donor": r["best_is_donor"]}
+        for x in decisions:
+            row[f"{x['source']}_call"] = x["r"]["call"]
+            row[f"{x['source']}_reason"] = x["reason"]
+        rows.append(row)
     out = pd.DataFrame(rows)
+    out["relabel_to_individualID"] = out["relabel_to_individualID"].fillna("")
 
-    # A relabel onto a person kept under their own label, or shared by two donors, is dropped
+    # A relabel onto a person kept under their own label, or shared by two donors,
+    # is dropped (people compared by individualID where known)
+    person = out["relabel_to_individualID"].where(out["relabel_to_individualID"] != "", out["relabel_to"])
     for name, table in out.groupby("dataset"):
-        kept = set(table.loc[table["action"] == "keep", "label"]) - {""}
-        targets = table.loc[table["action"] == "relabel", "relabel_to"]
+        kept = set(table.loc[table["action"] == "keep", "match"].fillna("")) - {""}
+        kept |= set(table.loc[table["action"] == "keep", "label"].fillna("")) - {""}
+        targets = person[table.index][table["action"] == "relabel"]
         for i, t in targets.items():
             why = ("is kept under their own label in this dataset" if t in kept else
                    "is the relabel target of another donor too" if (targets == t).sum() > 1 else "")
