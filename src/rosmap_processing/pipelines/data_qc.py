@@ -1496,8 +1496,9 @@ def check_genotype(specs: List[Dict[str, Any]], output: Path, genotypes: Union[s
     sample_pid = _projid(samples) if sample_ids == "projid" else _as_ids(samples)
     first = ~pd.Series(sample_pid).duplicated().to_numpy() & (sample_pid != "")
     samples, sample_pid, dosage = samples[first], sample_pid[first], dosage[:, first]
-    with np.errstate(invalid="ignore", divide="ignore"):
-        Zall = ((dosage - dosage.mean(axis=1, keepdims=True)) / dosage.std(axis=1, keepdims=True)).T
+    with np.errstate(invalid="ignore", divide="ignore"):  # missing calls (NaN) stay NaN, the rest is used
+        Zall = ((dosage - np.nanmean(dosage, axis=1, keepdims=True))
+                / np.nanstd(dosage, axis=1, keepdims=True)).T
     logger.info(f"genotypes: {len(samples)} samples, {len(variants)} variants (GRCh{build}); {len(eqtl)} eQTL pairs "
                 f"found ({eqtl['gene_id'].nunique()} genes); donors labelled by {sample_ids}")
     if sample_ids == "projid":
