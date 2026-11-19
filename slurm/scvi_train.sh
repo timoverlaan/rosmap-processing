@@ -26,5 +26,5 @@ source slurm/common.sh
 
 STAGE=train
 if [ "${1:-}" = "--stage" ]; then STAGE="$2"; shift 2; fi
-in_container bash -c 'pixi run -e gpu python -m rosmap_processing -v pipeline scvi-integration "$@"; rc=$?
+in_container bash -c 'pixi run -e gpu python -m rosmap_processing pipeline scvi-integration "$@"; rc=$?
     df -h / /tmp "$HOME" 2>/dev/null | sed "s/^/df: /"; exit $rc' _ config/scvi_integration.yaml --stage "$STAGE" "$@"
