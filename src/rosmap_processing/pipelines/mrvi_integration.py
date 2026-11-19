@@ -47,6 +47,10 @@ Stages:
            mrvi_distance   replicate metrics from MrVI's sample distances:
                            the rank of a held-out person's own sample in the
                            other dataset among all of that dataset's samples
+         and, with compare_samples, its compare_layers (the scVI run's scvi and
+         scanvi), so that all methods share one disease reference (the sample
+         per person that disease_analysis picks among tied nuclei counts can
+         differ between runs)
          -> metrics.tsv, disease.tsv, folds.tsv, history.tsv, umap/.
   all    train both folds, then score.
 
@@ -90,6 +94,10 @@ DEFAULTS: Dict[str, Any] = {
     "distance_cells": 2000,      # nuclei per cell type for the sample distances
     "distance_batch": 8,         # nuclei at a time (x samples^2 distances on the GPU)
     "umap_methods": ["none", "regress", "mrvi_A"],
+    # layers of another samples file with the same samples and genes (the scVI run's), scored
+    # alongside, so that every method shares one disease reference
+    "compare_samples": None,
+    "compare_layers": ["scvi", "scanvi"],
     "smoke_bridge_persons": 30,
     "smoke_other_persons": 20,
     "smoke_epochs": 2,
@@ -112,10 +120,27 @@ def load_spec(path: Union[str, Path]) -> Dict[str, Any]:
     spec = {**DEFAULTS, "name": Path(path).stem, **raw}
     spec["scvi"] = svi.load_spec(spec["scvi_spec"])
     spec["pooled"] = spec["scvi"]["pooled"]
-    bad = [m for m in spec["umap_methods"] if m not in SCORED]
+    bad = [m for m in spec["umap_methods"] if m not in SCORED + tuple(spec["compare_layers"])]
     if bad:
-        raise ValueError(f"umap_methods: {bad} are not among {SCORED}")
+        raise ValueError(f"umap_methods: {bad} are not among {SCORED} or compare_layers")
     return spec
+
+
+def compare_layers(spec: Dict[str, Any], samples) -> Dict[str, np.ndarray]:
+    """compare_layers of compare_samples, if it has the same samples and
+    genes as samples (else none, with a warning)."""
+    import anndata as ad
+
+    path = spec["compare_samples"]
+    if not path or not Path(path).exists():
+        return {}
+    other = ad.read_h5ad(path)
+    if not (other.obs_names.equals(samples.obs_names) and other.var_names.equals(samples.var_names)):
+        logger.warning(f"{path} does not have the same samples and genes; not compared")
+        return {}
+    found = {m: np.asarray(other.layers[m]) for m in spec["compare_layers"] if m in other.layers}
+    logger.info(f"Scoring {sorted(found)} of {path} alongside")
+    return found
 
 
 def run_dir(spec: Dict[str, Any], smoke: bool) -> Path:
@@ -551,6 +576,7 @@ def score(spec: Dict[str, Any], out: Path) -> Path:
     counts = samples.X.toarray() if sp.issparse(samples.X) else np.asarray(samples.X)
     genes = samples.var.reset_index(drop=True)
     layers = {f"mrvi_{k}": np.asarray(samples.layers[f"mrvi_{k}"]) for k in FOLDS}
+    others = compare_layers(spec, samples)
     distances = {k: read_distances(out / f"distances_{k}.h5") for k in FOLDS
                  if (out / f"distances_{k}.h5").exists()}
     numeric = [c for c in pooled["protect"] if c in pp.NUMERIC]
@@ -571,6 +597,7 @@ def score(spec: Dict[str, Any], out: Path) -> Path:
         batch = sub["batch"].to_numpy().astype(str)
         persons = sub["person_id"].to_numpy().astype(str)
         corrected = {"none": Y, "regress": pp.correct_regress(Y, batch, sub[list(pooled["protect"])], numeric)[0]}
+        corrected.update({m: np.log2(L[sel][:, keep] * 1e6 + 1) for m, L in others.items()})
         models = {m: np.log2(L[sel][:, keep] * 1e6 + 1) for m, L in layers.items()}
         logger.info(f"{celltype}: {len(sub)} samples, {int(keep.sum())} of {len(keep)} HVGs "
                     f"(mean CPM >= {pooled['min_cpm']} in every dataset); held out per model: "
@@ -622,7 +649,8 @@ def score(spec: Dict[str, Any], out: Path) -> Path:
     palette = pp.batch_palette(obs, list(pooled["datasets"]))
     titles = {**pp.method_titles(pooled["batch_split"]),
               "none": f"as measured ({spec['scvi']['max_cells_per_sample']} nuclei max)",
-              "mrvi_A": "MrVI, model A (half A anchored)", "mrvi_B": "MrVI, model B (half B anchored)"}
+              "mrvi_A": "MrVI, model A (half A anchored)", "mrvi_B": "MrVI, model B (half B anchored)",
+              "scvi": "scVI (batch key: batch)", "scanvi": "scANVI (+ broad cell types)"}
     label = "batch" if (obs["batch"] != obs["dataset"]).any() else "dataset"
     share = metrics[(metrics["metric"] == "pc_r2") & (metrics["label"] == label)]
     mixing = {(r.celltype, r.method): float(r.value) for r in share.itertuples()}

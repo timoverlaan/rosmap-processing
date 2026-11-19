@@ -101,7 +101,8 @@ def _mrvi_spec(tmp_path):
     path = tmp_path / "mrvi.yaml"
     path.write_text(yaml.safe_dump({"scvi_spec": str(tmp_path / "scvi.yaml"),
                                     "output_dir": str(tmp_path / "scvi" / "mrvi"),
-                                    "umap_methods": ["none", "mrvi_A"]}))
+                                    "compare_samples": str(tmp_path / "scvi" / "samples.h5ad"),
+                                    "umap_methods": ["none", "mrvi_A", "scvi"]}))
     return scvi, load_spec(path)
 
 
@@ -148,6 +149,8 @@ def test_score_stage(tmp_path):
         write_distances(out / f"distances_{k}.h5", names, {"Exc": D, "Ast": D})
         pd.DataFrame({"epoch": [0, 1], "elbo_train": [2.0, 1.0], "model": k}).to_csv(out / f"history_{k}.tsv",
                                                                                      sep="\t", index=False)
+    samples.layers = {"scvi": samples.layers["mrvi"]}   # stand-in for the scVI run's samples.h5ad
+    samples.write_h5ad(tmp_path / "scvi" / "samples.h5ad")
     score(spec, out)
 
     merged = ad.read_h5ad(out / "samples.h5ad")
@@ -155,7 +158,7 @@ def test_score_stage(tmp_path):
     for f, source in (("A", "mrvi_B"), ("B", "mrvi_A")):   # each bridge person from the model that held them out
         assert np.array_equal(merged.layers["mrvi"][fold == f], merged.layers[source][fold == f])
     m = pd.read_csv(out / "metrics.tsv", sep="\t")
-    assert {"none", "regress", "mrvi_A", "mrvi_B", "mrvi", "mrvi_anchors", "mrvi_distance"} <= set(m["method"])
+    assert {"none", "regress", "scvi", "mrvi_A", "mrvi_B", "mrvi", "mrvi_anchors", "mrvi_distance"} <= set(m["method"])
     top1 = m[(m["metric"] == "replicate_top1") & (m["label"] == "a vs b")].set_index(["celltype", "method"])
     held = {k: int(((fold != "") & (fold != k) & (merged.obs["celltype"] == "Exc").to_numpy()).sum() // 2)
             for k in FOLDS}
@@ -169,7 +172,9 @@ def test_score_stage(tmp_path):
     rel = m[(m["metric"] == "cross_dataset_reliability") & (m["celltype"] == "Exc")].set_index("method")
     assert rel.loc["mrvi", "n"] == 15
     disease = pd.read_csv(out / "disease.tsv", sep="\t")
-    assert "pooled: mrvi, no batch term (mean of the two models)" in set(disease["analysis"])
+    assert {"pooled: mrvi, no batch term (mean of the two models)", "pooled: scvi, no batch term"} \
+        <= set(disease["analysis"])
+    assert top1.loc[("Exc", "scvi"), "n"] == 15
     folds = pd.read_csv(out / "folds.tsv", sep="\t").set_index("datasets")
     assert folds.loc["a+b", ["A", "B"]].sum() == 15 and folds.loc["a+b", "not split"] == 0
     assert (out / "umap" / "overview.png").exists() and len(pd.read_csv(out / "history.tsv", sep="\t")) == 4
