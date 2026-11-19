@@ -10,10 +10,12 @@ import scipy.sparse as sp
 import yaml
 
 from rosmap_processing.pipelines.pooled_pseudobulk import (
+    _one_per_person,
     correct_anchor,
     correct_center,
     correct_regress,
     correct_ruv,
+    pca_alpha,
     prps_groups,
     ruv_apply,
     ruv_factors,
@@ -90,7 +92,7 @@ def _setup(tmp_path, split=False):
             "min_genes": 1, "min_cells": 5, "min_cpm": 1.0, "n_pcs": 10, "chunk_size": 500, "n_folds": 3,
             "ruv_prps_min": 2,
             "umap": split, "batch_split": {"b": "brain_bank"} if split else {},
-            "umap_methods": ["none", "regress", "anchor", "ruv"],
+            "umap_methods": ["none", "regress", "anchor", "ruv", "pcs"],
             "datasets": {name: {"counts": str(tmp_path / f"{name}.h5ad"),
                                 "gene_map": str(tmp_path / f"{name}.map.tsv"),
                                 "donor": "donor_key", "celltype": celltype} for name in PERSONS}}
@@ -162,9 +164,25 @@ def test_pooled_pseudobulk_end_to_end(tmp_path):
     assert set(factors["source"]) == {"ruv W", "bridge differences: remainder component"}
     assert factors["r_spearman"].abs().max() <= 1.0
 
+    # the pcs baseline (no replicates): a method of its own and rows of the scan
+    assert set(scan["factors"]) == {"replicates", "pcs"}
+    assert not scan.loc[scan["factors"] == "pcs", "chosen"].any()
+    for t in ("Exc", "Ast"):
+        assert pc[(t, "pcs")] < 0.05 and (t, "pcs") in top1.index
+    assert "pooled: pcs, no batch term" in set(disease["analysis"])
+    rel = m[m["metric"] == "cross_dataset_reliability"]
+    assert set(rel["method"]) == {"any", "regress", "pcs", "ruv"} and rel["value"].between(-1, 1).all()
+    sd = m[m["metric"] == "replicate_r_other_sd"]
+    assert set(sd["method"]) >= {"none", "anchor", "ruv", "pcs"} and (sd["value"] > 0).all()
+    covariates = pd.read_csv(out / "covariates.tsv", sep="\t")
+    assert set(covariates["covariate"]) == {"age_capped", "sex"}     # the others are not in the donor table
+    assert {"pooled: batch as covariate", "pooled: ruv, no batch term",
+            "pooled: pcs, no batch term"} <= set(covariates["analysis"])
+    assert (covariates["n_persons"] == 45 + 15).all()
+
     # aggregate tables hold no person or donor IDs
     for name in ("samples.tsv", "metrics.tsv", "disease.tsv", "offsets.tsv", "de_pooled.tsv", "genes.tsv",
-                 "ruv_scan.tsv", "ruv_diagnostic.tsv", "ruv_factors.tsv"):
+                 "covariates.tsv", "ruv_scan.tsv", "ruv_diagnostic.tsv", "ruv_factors.tsv"):
         text = (out / name).read_text()
         assert "P15" not in text and "a3" not in text and "S1" not in text
 
@@ -345,6 +363,30 @@ def test_ruv_pseudo_replicates_remove_the_offset_of_a_batch_without_bridges():
     assert abs(c_gap(without)) > 1.0
     assert abs(c_gap(with_prps)) < 0.15
     assert abs((with_prps[ds == "b", :20].mean() - with_prps[ds == "a", :20].mean())) < 0.1
+
+
+def test_pcs_baseline_removes_the_top_principal_components():
+    """With all genes as controls, the pcs baseline is Y minus its projection
+    on the top k principal axes."""
+    rng = np.random.default_rng(4)
+    Y = rng.normal(size=(25, 30)) @ np.diag(np.linspace(3, 0.5, 30)) + rng.normal(size=30)
+    k = 3
+    out, W = ruv_apply(Y, pca_alpha(Y, k), k)
+    Z = Y - Y.mean(axis=0)
+    _, _, Vt = np.linalg.svd(Z, full_matrices=False)
+    expected = Y - Z @ Vt[:k].T @ Vt[:k]
+    assert W.shape == (25, k)
+    assert np.allclose(out, expected)
+
+
+def test_one_sample_per_person_is_stable_among_ties():
+    """The most nuclei, and among ties the first row: the same pick whatever
+    the order of the ties' other columns."""
+    sub = pd.DataFrame({"person_id": ["p", "p", "q", "q", "q", "r"], "n_cells": [100, 100, 50, 80, 80, 5]})
+    usable = np.array([True, True, True, True, True, False])
+    assert list(_one_per_person(sub, usable)) == [0, 3]
+    for _ in range(5):   # same result on repeated calls
+        assert list(_one_per_person(sub, usable)) == [0, 3]
 
 
 def test_spec_pseudobulk_reads_an_existing_one(tmp_path):
