@@ -20,13 +20,13 @@ Rules (a sample "matches" a genotype when the check calls it so):
 - other person / identified (the sample matches another genotyped person X):
   - X is another donor of the dataset whose sample matches X too -> drop
     (a second sample of X);
+  - identified at under GENOTYPE_WEAK of the expected z -> keep, unverified
+    (a relative of X or a mixture, not a clean swap; evidence that the sample
+    is not X supports the label), unless the sex contradicts the record;
   - evidence against an RNA swap -> drop: the expression sex fits the label's
     record but not X's, or another dataset's sample of the labelled person
     also matches X (then the label's genotype or ID is wrong, or X is a
     relative);
-  - identified at under GENOTYPE_WEAK of the expected z -> keep, unverified
-    (a relative of X or a mixture, not a clean swap), unless the sex
-    contradicts the record;
   - evidence for an RNA swap -> relabel to X: the expression sex contradicts
     the label's record and fits X's, or another dataset's sample of the
     labelled person matches the label (or, without a genotype, not X);
@@ -93,27 +93,34 @@ def read_folder(folder: Path):
 
 
 def _evidence(r: dict, cross_rows: list):
-    """Evidence for and against an RNA swap of a donor matching person X."""
+    """Evidence about a donor whose sample matches another person X: texts for
+    an RNA swap, against it from sex, against it from another dataset, and
+    other observations (another dataset's z against X between NO_MATCH_Z and
+    MATCH_Z)."""
     ex, lab, bs = r["expression_sex"], r["label_sex"], r["best_sex"]
-    pro, con = [], []
+    pro, con_sex, con_cross, other = [], [], [], []
     if _known(ex) and _known(lab) and _known(bs):
         if ex != lab and ex == bs:
             pro.append(f"its expression sex ({ex}) contradicts the label's record ({lab}) and fits the matched "
                        f"person's")
         elif ex == lab and ex != bs:
-            con.append(f"its expression sex ({ex}) fits the label's record but not the matched person's ({bs})")
+            con_sex.append(f"its expression sex ({ex}) fits the label's record but not the matched person's ({bs})")
     for c in cross_rows:
         z_x, own_b = c["z_b_at_best_a"], c["own_z_b"]
         where = f"{c['dataset_b']} has a sample of the labelled person ({c['donor_b']}, called {c['call_b']})"
-        if np.isfinite(z_x) and z_x >= MATCH_Z:
-            con.append(f"{where} that also matches the matched person's genotype (z {_f(z_x)})")
-        elif c["call_b"] == "own genotype" and np.isfinite(z_x) and z_x < NO_MATCH_Z:
+        if not np.isfinite(z_x):
+            continue
+        if z_x >= MATCH_Z:
+            con_cross.append(f"{where} that also matches the matched person's genotype (z {_f(z_x)})")
+        elif c["call_b"] == "own genotype" and z_x < NO_MATCH_Z:
             pro.append(f"{where} that matches the label's genotype (z {_f(own_b)}) and not the matched "
                        f"person's (z {_f(z_x)})")
-        elif c["call_b"] in ("not genotyped", "identified") and np.isfinite(z_x) and z_x < NO_MATCH_Z \
-                and r["call"] == "identified":
+        elif c["call_b"] in ("not genotyped", "identified") and z_x < NO_MATCH_Z and r["call"] == "identified":
             pro.append(f"{where} that does not match the matched person's genotype (z {_f(z_x)})")
-    return pro, con
+        elif z_x >= NO_MATCH_Z:
+            other.append(f"{where} that scores z {_f(z_x)} against the matched person's genotype "
+                         f"(suggestive, below {MATCH_Z:.0f})")
+    return pro, con_sex, con_cross, other
 
 
 def decide(r: dict, partner: dict, cross_rows: list, target: str):
@@ -167,21 +174,27 @@ def decide(r: dict, partner: dict, cross_rows: list, target: str):
                     f"{match_text}; {target} is also donor {partner['donor']} of this dataset, whose sample "
                     f"matches their genotype too. This is a second sample of that person; the labelled "
                     f"person's own sample is missing.")
-        pro, con = _evidence(r, cross_rows)
-        if con:
-            return ("drop", "contradicted", "uncertain",
-                    f"{match_text}, but {'; '.join(con)}. The error may be in the genotype file, the ID map or "
-                    f"a sex record rather than the RNA (or {target} is a relative), so neither identity can be "
-                    f"trusted.")
+        pro, con_sex, con_cross, other = _evidence(r, cross_rows)
         if call == "identified" and r["weak"]:
+            # A weak match to X with no genotype for the label: a relative of X or
+            # a mixture; evidence that the sample is not X supports the label
             if sex_off:
                 return ("drop", "identified weak, sex off", "probably wrong",
                         f"The label has no genotype; the sample matches {target} only weakly (z {_f(best_z)}, "
                         f"{_f(100 * strength, 0)}% of expected), and {sex_text}.")
-            return ("keep", "identified weak", "unverified",
-                    f"label has no genotype; the sample matches {target} at about half strength (z {_f(best_z)}, "
-                    f"{_f(100 * strength, 0)}% of expected): a relative of {target} or a mixture, not a clean "
-                    f"swap; {'its expression sex fits the label' if _known(ex) and ex == lab else 'sex unknown'}")
+            notes = [f"label has no genotype; the sample matches {target} at about half strength "
+                     f"(z {_f(best_z)}, {_f(100 * strength, 0)}% of expected): a relative of {target} or a "
+                     f"mixture, not a clean swap"]
+            notes += [f"{t}, which argues against a swap to {target}" for t in con_sex]
+            notes += [f"{t}, which points to a relative rather than a mixture" for t in con_cross + other]
+            if not con_sex and _known(ex) and ex == lab:
+                notes.append("its expression sex fits the label")
+            return "keep", "identified weak", "unverified", "; ".join(notes)
+        if con_sex or con_cross:
+            return ("drop", "contradicted", "uncertain",
+                    f"{match_text}, but {'; '.join(con_sex + con_cross)}. The error may be in the genotype file, "
+                    f"the ID map or a sex record rather than the RNA (or {target} is a relative), so neither "
+                    f"identity can be trusted.")
         if r["weak"]:
             return ("drop", "weak match", "uncertain",
                     f"{match_text}; the match is weak, so it is no basis for a relabel, and the label does not "
