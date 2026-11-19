@@ -452,6 +452,22 @@ its docstring): `restricted/genotype_actions.tsv` and the aggregate
 `genotype_actions_summary.tsv`. It relabels only a swap that sex or another
 dataset confirms, and drops a swap nothing confirms.
 
+WGS as a second DNA source: `sbatch slurm/fetch_wgs.sh amp1` (AMP-AD 1.0
+joint calls, `syn11707420`, GRCh37) and `divco` (DiverseCohorts + AMP-AD 1.0
+overlap, `syn66709613`, GRCh38) fetch only the eQTL sites and some chrX sites
+through byte ranges of the indexed VCFs (`scripts/fetch_wgs_sites.py`, about
+2.5 GB transferred per set, not the 500-700 GB files) into
+`data/v2/genotypes/restricted/`. `sbatch slurm/genotype_wgs.sh` then writes
+`data/v2/qc/genotype_wgs/`: per WGS set, the array vs WGS genotypes per
+person and DNA sex from chrX (`scripts/genotype_wgs_check.py`; the array's
+own chrX het calls are not usable for sex), and the genotype check against
+WGS (`check_amp1`, `check_divco`, labels by individualID). `genotype_actions.py
+--wgs NAME=FOLDER --array-vs-wgs FOLDER` combines the sources per donor (see
+its docstring): an array entry shown wrong by WGS no longer drops a donor, and
+a swap that the array and WGS both match to the same person is relabelled.
+`scripts/export_donor_table.py` writes one row per donor of a processed h5ad
+with the combined verdict (e.g. `data/v2/donors/rosmap_green_hvg2000_k30_donors.tsv`).
+
 Donor IDs of sex, identity or genotype mismatches go to `restricted/` for
 follow-up on the cluster; they are never logged. On DAIC, `bash
 slurm/submit_qc.sh` submits everything (gene lists, five scans, one job per
