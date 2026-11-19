@@ -89,3 +89,22 @@ def test_allele_counts_and_heterozygous(tmp_path):
     np.testing.assert_array_equal(remote_vcf.allele_counts(records[40000], 2), [1, 2, 0])
     np.testing.assert_array_equal(remote_vcf.heterozygous(records[90000]), [0, 0, np.nan])  # haploid calls
     np.testing.assert_array_equal(remote_vcf.heterozygous(records[40000]), [1, 0, 1])
+
+
+@pytest.mark.parametrize("block_size", [60, 150, 400])
+def test_fetch_records_bisects_like_a_scan(tmp_path, block_size):
+    """Dense records over several 16 kb windows, tiny blocks: bisecting the
+    window (with a small `close`) finds the same records as scanning it."""
+    rng = np.random.default_rng(1)
+    positions = np.unique(rng.integers(1, 60000, size=400))
+    records = [("1", int(p), "A", "G", [rng.choice(["0/0", "0/1", "1/1"]) for _ in SAMPLES]) for p in positions]
+    tbi = _write_indexed_vcf(tmp_path / "x.vcf.gz", records, block_size=block_size)
+    linear = remote_vcf.read_tbi(tbi)
+    ranges = remote_vcf.FileRanges(tmp_path / "x.vcf.gz")
+    wanted = sorted(set(rng.choice(positions, 40).tolist()) | {1, 59999, int(positions[0]), int(positions[-1])})
+    scan = list(remote_vcf.fetch_records(ranges, linear, "1", wanted, jump=0, bisect=False))
+    before = ranges.bytes_read
+    bisected = list(remote_vcf.fetch_records(ranges, linear, "1", wanted, jump=0, bisect=True, close=64))
+    assert [(p, f[9:]) for p, f in bisected] == [(p, f[9:]) for p, f in scan]
+    assert {p for p, _ in scan} == set(wanted) & set(positions.tolist())
+    assert ranges.bytes_read - before > 0

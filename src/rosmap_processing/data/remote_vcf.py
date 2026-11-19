@@ -168,12 +168,86 @@ def vcf_samples(ranges) -> List[str]:
     raise ValueError("no #CHROM line in the VCF header")
 
 
+def _record_after(ranges, coff: int, probe: int = 1 << 16) -> Optional[Tuple[int, int, str, int]]:
+    """The first record that starts in a BGZF block at or after compressed
+    offset `coff`: (block offset, offset of the line in the block, chrom,
+    position); None at the end of the file. Block starts are found by their
+    header and checked by inflating (the size in the trailer must agree)."""
+    buf, base = b"", coff
+    while True:
+        while len(buf) < 18:
+            more = ranges.read(base + len(buf), probe)
+            if not more:
+                return None
+            buf += more
+        k = buf.find(b"\x1f\x8b\x08\x04")
+        if k < 0 or len(buf) - k < 18:
+            keep = max(len(buf) - 17, 0) if k < 0 else k
+            base, buf = base + keep, buf[keep:]
+            more = ranges.read(base + len(buf), probe)
+            if not more:
+                return None
+            buf += more
+            continue
+        try:
+            size = _block_size(buf, k)
+        except ValueError:
+            base, buf = base + k + 1, buf[k + 1:]
+            continue
+        while len(buf) - k < size:
+            more = ranges.read(base + len(buf), probe)
+            if not more:
+                return None
+            buf += more
+        block = buf[k:k + size]
+        try:
+            data = _inflate(block)
+            valid = len(data) == struct.unpack_from("<I", block, size - 4)[0]
+        except (zlib.error, struct.error):
+            valid = False
+        if not valid:
+            base, buf = base + k + 1, buf[k + 1:]
+            continue
+        # A line that starts in this block (after its first newline)
+        nl = data.find(b"\n")
+        while nl >= 0 and nl + 1 < len(data):
+            head = data[nl + 1:nl + 200]
+            if not head.startswith(b"#") and head.count(b"\t") >= 2:
+                chrom, pos = head.split(b"\t", 2)[:2]
+                return base + k, nl + 1, chrom.decode(), int(pos)
+            if head.count(b"\t") < 2:
+                break  # the line's start continues in the next block: try the next block
+            nl = data.find(b"\n", nl + 1)
+        base, buf = base + k + size, buf[k + size:]
+
+
+def _start_before(ranges, index: List[int], chrom: str, p: int, close: int = 1 << 17) -> int:
+    """A virtual offset of a record start before position p, near it: from the
+    linear index's window offset, bisected over the compressed blocks of the
+    window (the next window's offset bounds it) until within `close` bytes."""
+    window = (p - 1) >> TBI_SHIFT
+    best = index[window]
+    lo = best >> 16
+    later = [v for v in index[window + 1:window + 64] if v > best]
+    hi = (later[0] >> 16) if later else ranges.size
+    while hi - lo > close:
+        mid = (lo + hi) // 2
+        found = _record_after(ranges, mid)
+        if found is None or found[0] >= hi or found[2] != chrom or found[3] >= p:
+            hi = mid
+        else:
+            best, lo = (found[0] << 16) | found[1], found[0]
+    return best
+
+
 def fetch_records(ranges, linear: Dict[str, List[int]], chrom: str, positions: Iterable[int],
-                  jump: int = 1 << 20, chunk: int = 1 << 18) -> Iterator[Tuple[int, List[bytes]]]:
+                  jump: int = 1 << 18, chunk: int = 1 << 16, bisect: bool = True,
+                  close: int = 1 << 17) -> Iterator[Tuple[int, List[bytes]]]:
     """All records of `chrom` at the given 1-based positions, in order:
     (position, the record's tab-separated fields). Streams on between nearby
-    positions and seeks (by the linear index) when the next one is more than
-    `jump` compressed bytes ahead; reads `chunk` bytes per range request."""
+    positions; seeks when the next one's window starts more than `jump`
+    compressed bytes ahead, to a record start found by bisecting the window
+    (`bisect`) or to the window start. Reads `chunk` bytes per range request."""
     index = linear.get(chrom)
     if not index:
         return
@@ -188,7 +262,7 @@ def fetch_records(ranges, linear: Dict[str, List[int]], chrom: str, positions: I
             continue  # the stream is past p: no record there
         target = index[window]
         if lines is None or (target >> 16) > stream.coff + jump:
-            stream.seek(target)
+            stream.seek(_start_before(ranges, index, chrom, p, close) if bisect else target)
             lines, pending = stream.lines(), None
         while True:
             if pending is not None:
