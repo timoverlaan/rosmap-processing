@@ -300,6 +300,25 @@ def _sample_codes(obs: pd.DataFrame):
     return codes, groups
 
 
+def sample_sums(adata, codes: np.ndarray, n_groups: int):
+    """One row per sample (code): the obs of its first cell with n_cells and
+    the summed library sizes, X = the summed counts; index
+    dataset:donor:celltype."""
+    import anndata as ad
+
+    first = pd.Series(np.arange(adata.n_obs)).groupby(codes).first().to_numpy()
+    obs = adata.obs.iloc[first].reset_index(drop=True)
+    obs["n_cells"] = np.bincount(codes, minlength=n_groups)
+    obs["library_size"] = np.bincount(codes, weights=adata.obs["library_size"].to_numpy(np.float64),
+                                      minlength=n_groups)
+    counts = bm._indicator(codes, n_groups) @ adata.X
+    samples = ad.AnnData(sp.csr_matrix(np.rint(counts.toarray() if sp.issparse(counts) else counts)
+                                       .astype(np.int32)), obs=obs, var=adata.var.copy())
+    samples.obs.index = (obs["dataset"].astype(str) + ":" + obs["donor"].astype(str) + ":"
+                         + obs["celltype"].astype(str)).to_numpy()
+    return samples
+
+
 def decode_samples(model, adata, codes: np.ndarray, n_groups: int, chunk: int):
     """Per sample, the mean over its cells of the decoded expression (averaged
     over all batches; proportions over the model's genes) and of the latent
@@ -323,7 +342,6 @@ def decode_samples(model, adata, codes: np.ndarray, n_groups: int, chunk: int):
 
 
 def train_models(spec: Dict[str, Any], overwrite: bool = False) -> Path:
-    import anndata as ad
     import scvi
     import torch
 
@@ -363,20 +381,11 @@ def train_models(spec: Dict[str, Any], overwrite: bool = False) -> Path:
 
     codes, groups = _sample_codes(adata.obs)
     n_groups = len(groups)
-    first = pd.Series(np.arange(adata.n_obs)).groupby(codes).first().to_numpy()
-    obs = adata.obs.iloc[first].reset_index(drop=True)
-    obs["n_cells"] = np.bincount(codes, minlength=n_groups)
-    obs["library_size"] = np.bincount(codes, weights=adata.obs["library_size"].to_numpy(np.float64),
-                                      minlength=n_groups)
-    counts = bm._indicator(codes, n_groups) @ adata.X
-    samples = ad.AnnData(sp.csr_matrix(np.rint(counts.toarray() if sp.issparse(counts) else counts)
-                                       .astype(np.int32)), obs=obs, var=adata.var.copy())
+    samples = sample_sums(adata, codes, n_groups)
     for name, m in models.items():
         expr, latent = decode_samples(m, adata, codes, n_groups, spec["decode_chunk"])
         samples.layers[name] = expr.astype(np.float32)
         samples.obsm[f"latent_{name}"] = latent.astype(np.float32)
-    samples.obs.index = (obs["dataset"].astype(str) + ":" + obs["donor"].astype(str) + ":"
-                         + obs["celltype"].astype(str)).to_numpy()
     samples.uns["provenance_scvi_train"] = provenance_record(
         "scvi_integration train", {"spec": spec["name"], "scvi_tools": scvi.__version__})
     samples.write_h5ad(path, compression="gzip")

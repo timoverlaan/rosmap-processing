@@ -265,6 +265,18 @@ def main():
                              help="cells: sample cells (CPU); train: scVI + scANVI, then score (GPU); "
                                   "score: only the scoring")
     scvi_parser.add_argument("--overwrite", action="store_true", help="Replace the stage's existing output")
+    mrvi_parser = pipeline_subparsers.add_parser(
+        "mrvi-integration",
+        help="MrVI on the scVI integration's cells, persons in two datasets as anchors (cross-fitted), scored alike",
+    )
+    mrvi_parser.add_argument("spec", type=str, help="YAML spec, e.g. config/mrvi_integration.yaml")
+    mrvi_parser.add_argument("--stage", choices=["train", "score", "all"], required=True,
+                             help="train: MrVI per fold, decoded samples and sample distances (GPU); "
+                                  "score: merge the folds and score (CPU); all: both")
+    mrvi_parser.add_argument("--fold", choices=["A", "B"], help="Train only this fold (default: both)")
+    mrvi_parser.add_argument("--smoke", action="store_true",
+                             help="A subset of persons and a few epochs, in <output_dir>/smoke")
+    mrvi_parser.add_argument("--overwrite", action="store_true", help="Replace the fold's existing output")
 
     # pipeline qc-scan / qc-check
     qc_scan_parser = pipeline_subparsers.add_parser(
@@ -574,6 +586,9 @@ def handle_pipeline_command(args):
     elif args.pipeline_command == "scvi-integration":
         from rosmap_processing.pipelines.scvi_integration import run_scvi_integration
         run_scvi_integration(args.spec, args.stage, overwrite=args.overwrite)
+    elif args.pipeline_command == "mrvi-integration":
+        from rosmap_processing.pipelines.mrvi_integration import run_mrvi_integration
+        run_mrvi_integration(args.spec, args.stage, fold=args.fold, smoke=args.smoke, overwrite=args.overwrite)
 
     elif args.pipeline_command == "qc-scan":
         from rosmap_processing.pipelines.data_qc import run_scan

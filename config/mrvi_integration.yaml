@@ -1,0 +1,17 @@
+# MrVI on the sampled nuclei of the scVI integration, with the persons in two
+# or more datasets as anchors, cross-fitted in two halves
+# (pipelines/mrvi_integration.py). Needs data/v2/scvi/cells.h5ad
+# (slurm/scvi_cells.sh) and the 0.3.0 container (pixi environment gpu):
+#   sbatch slurm/mrvi_train.sh --stage all --smoke   # both folds on a subset, then the scores
+#   sbatch --array=0-1 slurm/mrvi_train.sh           # fold A (task 0) and B (task 1)
+#   sbatch --dependency=afterok:<array job> slurm/mrvi_score.sh
+scvi_spec: config/scvi_integration.yaml   # cells.h5ad, the HVGs and the scoring settings
+output_dir: data/v2/scvi/mrvi
+n_latent: 30                # z (the sample-aware space)
+n_latent_u: 10              # u (cell state without the sample)
+max_epochs: 60              # with early stopping on the validation ELBO
+early_stopping_patience: 10
+batch_size: 1024
+lr: 0.002
+n_epochs_kl_warmup: 20
+distance_cells: 2000        # nuclei per cell type for MrVI's sample distances
