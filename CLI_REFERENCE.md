@@ -446,6 +446,11 @@ for checking that, without donor IDs:
 
 Per-donor values (`expected_z`, `strength`, `weak`, `next_z`, the sexes,
 kinships, cross-dataset rows, related genotype pairs) are in `restricted/`.
+`scripts/genotype_actions.py` turns them into one action per donor (keep,
+relabel or drop, with the reason and a written motivation; the rules are in
+its docstring): `restricted/genotype_actions.tsv` and the aggregate
+`genotype_actions_summary.tsv`. It relabels only a swap that sex or another
+dataset confirms, and drops a swap nothing confirms.
 
 Donor IDs of sex, identity or genotype mismatches go to `restricted/` for
 follow-up on the cluster; they are never logged. On DAIC, `bash

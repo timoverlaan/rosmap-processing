@@ -279,19 +279,69 @@ def test_genotype_check_needs_enough_variants(tmp_path):
     assert s["n_no_data"] == GENO_DONORS
 
 
+def _write_sex_by_donor(qc_dir):
+    """The sex check's per-donor file: expression sex is the true person's
+    (persons: p % 2 = male), recorded is the label's."""
+    true = np.arange(GENO_DONORS)
+    true[10], true[20], true[21] = 80, 21, 20
+    donor = [f"R{d:03d}" if d != 30 else "X030" for d in range(GENO_DONORS)]
+    pd.DataFrame({"donor": donor, "recorded": ["M" if d % 2 else "F" for d in range(GENO_DONORS)],
+                  "expression": ["M" if t % 2 else "F" for t in true]}).to_csv(
+        qc_dir / "restricted" / "sex_by_donor.tsv", sep="\t", index=False)
+
+
+def _genotype_actions(monkeypatch, *argv):
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "scripts" / "genotype_actions.py"
+    spec = importlib.util.spec_from_file_location("genotype_actions", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr("sys.argv", ["genotype_actions.py", *map(str, argv)])
+    module.main()
+
+
+def test_genotype_actions(tmp_path, monkeypatch):
+    """scripts/genotype_actions.py: the mutual swap is confirmed by sex and
+    relabelled; donor 10 (same sex as its person 80) and X030 (no genotyped
+    label) are unconfirmed and dropped; the rest are kept. With a second
+    dataset holding the same samples, the swaps are contradicted."""
+    monkeypatch.setattr(data_qc, "GENOTYPE_MIN_VARIANTS", 50)
+    _rosmap_genotypes(tmp_path, _genotype_setup(tmp_path))
+    _write_sex_by_donor(tmp_path / "qc")
+    kwargs = dict(genotypes=tmp_path / "geno.tsv.gz", eqtls=tmp_path / "eqtls.tsv", id_map=tmp_path / "ids.csv")
+    one = data_qc.run_check("genotype", [tmp_path / "qc.yaml"], output=tmp_path / "one", **kwargs)
+    _genotype_actions(monkeypatch, one, "--id-map", tmp_path / "ids.csv")
+    actions = pd.read_csv(one / "restricted" / "genotype_actions.tsv", sep="\t", dtype=str).set_index("donor")
+    assert actions.loc["R020", ["action", "relabel_to", "relabel_to_individualID"]].tolist() == \
+        ["relabel", "21", "R021"]
+    assert actions.loc["R021", ["action", "relabel_to"]].tolist() == ["relabel", "20"]
+    assert "shifted" in actions.loc["R020", "motivation"]
+    assert actions.loc["R010", ["action", "reason"]].tolist() == ["drop", "unconfirmed"]
+    assert actions.loc["X030", "action"] == "drop"
+    assert (actions.drop(index=["R010", "R020", "R021", "X030"])["action"] == "keep").all()
+    summary = pd.read_csv(one / "genotype_actions_summary.tsv", sep="\t")
+    assert summary["n_donors"].sum() == GENO_DONORS
+
+    shutil.copytree(tmp_path / "qc", tmp_path / "qc2")
+    qc2 = yaml.safe_load((tmp_path / "qc.yaml").read_text())
+    qc2["output_dir"] = str(tmp_path / "qc2")
+    (tmp_path / "qc2.yaml").write_text(yaml.safe_dump(qc2))
+    two = data_qc.run_check("genotype", [tmp_path / "qc.yaml", tmp_path / "qc2.yaml"], output=tmp_path / "two",
+                            **kwargs)
+    _genotype_actions(monkeypatch, two, "--id-map", tmp_path / "ids.csv", "--output", tmp_path / "actions")
+    actions = pd.read_csv(tmp_path / "actions" / "restricted" / "genotype_actions.tsv", sep="\t", dtype=str)
+    swapped = actions[actions["donor"].isin(["R020", "R021"])]
+    assert len(swapped) == 4 and (swapped["reason"] == "contradicted").all()
+
+
 def test_genotype_check_validation_tables(tmp_path, monkeypatch):
     """The tables for checking the calls: matched-person sex, a second dataset
     with the same samples (cross detail), a duplicated genotype sample
     (kinship) and expected z / weak flags."""
     monkeypatch.setattr(data_qc, "GENOTYPE_MIN_VARIANTS", 50)
     _rosmap_genotypes(tmp_path, _genotype_setup(tmp_path), duplicate=90)
-    # Expression sex is the true person's (persons: p % 2 = male); recorded is the label's
-    true = np.arange(GENO_DONORS)
-    true[10], true[20], true[21] = 80, 21, 20
-    donor = [f"R{d:03d}" if d != 30 else "X030" for d in range(GENO_DONORS)]
-    pd.DataFrame({"donor": donor, "recorded": ["M" if d % 2 else "F" for d in range(GENO_DONORS)],
-                  "expression": ["M" if t % 2 else "F" for t in true]}).to_csv(
-        tmp_path / "qc" / "restricted" / "sex_by_donor.tsv", sep="\t", index=False)
+    _write_sex_by_donor(tmp_path / "qc")
     # A second dataset with the same nuclei
     shutil.copytree(tmp_path / "qc", tmp_path / "qc2")
     qc2 = yaml.safe_load((tmp_path / "qc.yaml").read_text())
