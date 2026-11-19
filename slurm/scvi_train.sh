@@ -17,10 +17,14 @@
 
 CONTAINER="${CONTAINER:-./container_pixi_0-3-0.sif}"
 THREADS="${SLURM_CPUS_PER_TASK:-8}"
-EXTRA_BINDS="--nv --bind config/:/opt/app/config/ --env OMP_NUM_THREADS=$THREADS --env OPENBLAS_NUM_THREADS=$THREADS --env MKL_NUM_THREADS=$THREADS"
+# Python bytecode and caches (numba, CUDA, matplotlib, ...) to the job's /tmp:
+# the writable tmpfs holds only 64 MB, and importing torch, scvi and scanpy
+# writes ~90 MB of .pyc files (the gpu env is not precompiled in the image).
+CACHES="--env PYTHONPYCACHEPREFIX=/tmp/pycache --env NUMBA_CACHE_DIR=/tmp/numba --env XDG_CACHE_HOME=/tmp/cache --env CUDA_CACHE_PATH=/tmp/nv --env MPLCONFIGDIR=/tmp/mpl --env TMPDIR=/tmp"
+EXTRA_BINDS="--nv --bind config/:/opt/app/config/ $CACHES --env OMP_NUM_THREADS=$THREADS --env OPENBLAS_NUM_THREADS=$THREADS --env MKL_NUM_THREADS=$THREADS"
 source slurm/common.sh
 
 STAGE=train
 if [ "${1:-}" = "--stage" ]; then STAGE="$2"; shift 2; fi
-in_container pixi run -e gpu python -m rosmap_processing pipeline scvi-integration config/scvi_integration.yaml \
-    --stage "$STAGE" "$@"
+in_container bash -c 'pixi run -e gpu python -m rosmap_processing -v pipeline scvi-integration "$@"; rc=$?
+    df -h / /tmp "$HOME" 2>/dev/null | sed "s/^/df: /"; exit $rc' _ config/scvi_integration.yaml --stage "$STAGE" "$@"

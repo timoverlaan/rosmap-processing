@@ -332,6 +332,7 @@ def train_models(spec: Dict[str, Any], overwrite: bool = False) -> Path:
     if path.exists() and not overwrite:
         raise FileExistsError(f"{path} exists; pass --overwrite to replace it")
     scvi.settings.seed = spec["seed"]
+    scvi.settings.logging_dir = str(out / "scvi_log")   # not the container's small writable tmpfs
     torch.set_float32_matmul_precision("high")
     accelerator = "gpu" if torch.cuda.is_available() else "cpu"
     logger.info(f"scvi-tools {scvi.__version__}, torch {torch.__version__}, accelerator {accelerator}"
