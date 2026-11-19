@@ -10,10 +10,10 @@ No htslib needed: BGZF blocks are plain deflate members with a size field.
 """
 
 import gzip
+import http.client
 import struct
 import time
-import urllib.error
-import urllib.request
+import urllib.parse
 import zlib
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
@@ -79,14 +79,28 @@ class FileRanges:
 
 
 class HttpRanges:
-    """Byte ranges of a URL. url() gives a fresh URL (presigned URLs expire);
-    it is called again after a failed request. A server that ignores the Range
-    header is an error, so a whole file is never streamed by accident."""
+    """Byte ranges of a URL over one kept-alive connection (a range costs a
+    round trip, not a new TLS handshake). url() gives a fresh URL (presigned
+    URLs expire); it is called again after a failed request. A server that
+    ignores the Range header is an error and the connection is dropped unread,
+    so a whole file is never streamed by accident."""
 
-    def __init__(self, url: Callable[[], str], size: int, retries: int = 6):
-        self.url, self.size, self.retries = url, size, retries
-        self._current = url()
-        self.bytes_read = 0
+    def __init__(self, url: Callable[[], str], size: int, retries: int = 6, timeout: float = 180):
+        self.url, self.size, self.retries, self.timeout = url, size, retries, timeout
+        self._conn, self.bytes_read, self.requests = None, 0, 0
+        self._open(url())
+
+    def _open(self, current: str) -> None:
+        parts = urllib.parse.urlsplit(current)
+        self._target = parts.path + (f"?{parts.query}" if parts.query else "")
+        connection = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+        self._close()
+        self._conn = connection(parts.netloc, timeout=self.timeout)
+
+    def _close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
 
     def read(self, start: int, length: int) -> bytes:
         end = min(start + length, self.size) - 1
@@ -94,18 +108,22 @@ class HttpRanges:
             return b""
         for attempt in range(self.retries):
             try:
-                request = urllib.request.Request(self._current, headers={"Range": f"bytes={start}-{end}"})
-                with urllib.request.urlopen(request, timeout=180) as response:
-                    if response.status != 206:
-                        raise RuntimeError(f"the server ignored the byte range (HTTP {response.status})")
-                    data = response.read()
+                self._conn.request("GET", self._target, headers={"Range": f"bytes={start}-{end}"})
+                response = self._conn.getresponse()
+                if response.status != 206:
+                    self._close()
+                    if response.status == 200:
+                        raise RuntimeError("the server ignored the byte range (HTTP 200)")
+                    raise ConnectionError(f"HTTP {response.status}")
+                data = response.read()
                 self.bytes_read += len(data)
+                self.requests += 1
                 return data
-            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+            except (http.client.HTTPException, ConnectionError, TimeoutError, OSError):
                 if attempt == self.retries - 1:
                     raise
                 time.sleep(2 ** attempt)
-                self._current = self.url()
+                self._open(self.url())
         raise RuntimeError("unreachable")
 
 

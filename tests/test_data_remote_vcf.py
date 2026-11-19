@@ -108,3 +108,50 @@ def test_fetch_records_bisects_like_a_scan(tmp_path, block_size):
     assert [(p, f[9:]) for p, f in bisected] == [(p, f[9:]) for p, f in scan]
     assert {p for p, _ in scan} == set(wanted) & set(positions.tolist())
     assert ranges.bytes_read - before > 0
+
+
+def _serve(blob, honour_range=True):
+    """A local HTTP/1.1 server (keep-alive) for one file; returns (url, server)."""
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):  # noqa: N802
+            start, end = 0, len(blob) - 1
+            if honour_range and self.headers.get("Range"):
+                start, end = (int(x) for x in self.headers["Range"].split("=")[1].split("-"))
+                self.send_response(206)
+            else:
+                self.send_response(200)
+            body = blob[start:end + 1]
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_address[1]}/x.vcf.gz?sig=1", server
+
+
+def test_http_ranges(tmp_path):
+    tbi = _write_indexed_vcf(tmp_path / "x.vcf.gz", RECORDS)
+    blob = (tmp_path / "x.vcf.gz").read_bytes()
+    url, server = _serve(blob)
+    try:
+        ranges = remote_vcf.HttpRanges(lambda: url, len(blob))
+        got = list(remote_vcf.fetch_records(ranges, remote_vcf.read_tbi(tbi), "1", [100, 17000, 90001]))
+        assert [p for p, _ in got] == [100, 17000, 17000, 90001]
+        assert remote_vcf.vcf_samples(ranges) == SAMPLES and ranges.requests > 1
+    finally:
+        server.shutdown()
+    url, server = _serve(blob, honour_range=False)
+    try:
+        with pytest.raises(RuntimeError, match="ignored the byte range"):
+            remote_vcf.HttpRanges(lambda: url, len(blob)).read(0, 100)
+    finally:
+        server.shutdown()
