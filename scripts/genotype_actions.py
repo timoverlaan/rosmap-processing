@@ -65,6 +65,7 @@ NO_MATCH_Z = 3.0       # another dataset's sample "does not match" a genotype be
 MATCH_Z = 6.0          # ... and matches it at this z or more
 MISMATCH_NUCLEI = 2000  # with this many nuclei a sample of the labelled person scores z ~10
 MISMATCH_Z = 2.0
+DUPLICATE_KINSHIP = 0.8  # kinship of two genotype samples of one person (data_qc.KINSHIP_DUPLICATE)
 CONFIDENT = ("own genotype", "other person", "identified")
 
 
@@ -90,7 +91,10 @@ def read_folder(folder: Path):
         kind = "projid" if "label_projid" in table else "sample"
         kinds.add(kind)
         table = table.rename(columns={f"label_{kind}": "label", f"best_{kind}": "best"})
-        for c in ("own_z", "best_z", "next_z", "expected_z", "strength", "n_nuclei"):
+        for c in ("own_z", "best_z", "next_z", "expected_z", "strength", "n_nuclei", "label_best_kinship",
+                  "best_max_kinship"):
+            if c not in table:
+                table[c] = ""
             table[c] = pd.to_numeric(table[c], errors="coerce")
         table["weak"] = table["weak"].eq("True")
         table["kind"] = kind
@@ -159,6 +163,17 @@ def decide(r: dict, partner: dict, cross_rows: list, target: str):
             notes.append(f"matches its own genotype, but {sex_text}: the sex record is probably wrong")
         reason = "own genotype, sex record" if sex_off else "own genotype, weak" if r["weak"] else "own genotype"
         return "keep", reason, "verified", "; ".join(notes)
+
+    # The best match (or the runner-up of the label) is a duplicate of the
+    # label's own genotype sample: the same person filed twice in the genotype set
+    duplicate = (r["label_best_kinship"] >= DUPLICATE_KINSHIP if np.isfinite(r["label_best_kinship"])
+                 else label_best and np.isfinite(r["best_max_kinship"]) and r["best_max_kinship"] >= DUPLICATE_KINSHIP)
+    if call in ("unclear", "other person") and duplicate and np.isfinite(own_z) and own_z >= MATCH_Z \
+            and not sex_off:
+        return ("keep", "own genotype, duplicate genotype sample", "verified",
+                f"matches its own genotype (z {_f(own_z)}); the {'best match' if not label_best else 'runner-up'} is "
+                f"a duplicate of the label's genotype sample (the same person under a second ID in the genotype "
+                f"set), which is why the call was {call}")
 
     if call == "unclear":
         if label_best and not sex_off:
@@ -286,7 +301,8 @@ def combine(decisions: list, array_status: dict):
     def text(ds):
         return " ".join(tag(d) + (d["motivation"] or f"{d['r']['call']}.") for d in ds)
 
-    own = [d for d in decisions if d["reason"] in ("own genotype", "own genotype, weak", "own genotype, sex record")]
+    own = [d for d in decisions if d["reason"] in ("own genotype", "own genotype, weak", "own genotype, sex record",
+                                                   "own genotype, duplicate genotype sample")]
     full_own = [d for d in own if d["reason"] != "own genotype, weak"]
     swaps = [d for d in decisions if d["action"] == "relabel" or d["reason"] == "second sample of a donor"]
     if full_own or (own and not swaps):
