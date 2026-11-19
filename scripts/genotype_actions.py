@@ -104,7 +104,7 @@ def _evidence(r: dict, cross_rows: list):
             pro.append(f"its expression sex ({ex}) contradicts the label's record ({lab}) and fits the matched "
                        f"person's")
         elif ex == lab and ex != bs:
-            con_sex.append(f"its expression sex ({ex}) fits the label's record but not the matched person's ({bs})")
+            con_sex.append(f"its expression sex ({ex}) fits the label's record, not the matched person's ({bs})")
     for c in cross_rows:
         z_x, own_b = c["z_b_at_best_a"], c["own_z_b"]
         where = f"{c['dataset_b']} has a sample of the labelled person ({c['donor_b']}, called {c['call_b']})"
