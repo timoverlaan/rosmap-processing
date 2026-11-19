@@ -1259,6 +1259,10 @@ GENOTYPE_PCS = 10         # expression PCs removed per layer (at most one per 10
 GENOTYPE_MAX_P = 1e-3     # features kept: in-sample eQTL p at most this
 GENOTYPE_MIN_CPM = 5.0    # eQTL genes expressed at least this much in a layer
 GENOTYPE_MIN_DONORS = 30
+# How a donor's label finds its genotype sample: "projid" maps the match key to
+# a projid through an ID map and reads the projid from the sample ID (ROSMAP);
+# "match" and "donor" take the match key or the donor ID as the sample ID itself
+GENOTYPE_SAMPLE_IDS = ("projid", "match", "donor")
 _COMPLEMENT = str.maketrans("ACGT", "TGCA")
 
 
@@ -1269,6 +1273,12 @@ def _projid(values) -> np.ndarray:
     return s.map(lambda x: str(int(x)) if isinstance(x, str) else "").to_numpy(dtype=object)
 
 
+def _as_ids(values) -> np.ndarray:
+    """IDs as stripped strings; '' when there is none."""
+    s = pd.Series(values, dtype=object)
+    return s.where(s.notna(), "").astype(str).str.strip().to_numpy(dtype=object)
+
+
 def read_genotypes(path: Union[str, Path]):
     """A dosage table (snp, a1, a2, then one column per genotyped sample) ->
     (variants, sample IDs, dosage matrix variants x samples)."""
@@ -1277,20 +1287,24 @@ def read_genotypes(path: Union[str, Path]):
             table.iloc[:, 3:].to_numpy(dtype=np.float64))
 
 
-def _match_eqtls(eqtls: pd.DataFrame, variants: pd.DataFrame) -> np.ndarray:
-    """Per eQTL, the genotype row of its variant (by rsID or GRCh37 chr:pos,
-    with the same alleles on either strand), else -1."""
+def _match_eqtls(eqtls: pd.DataFrame, variants: pd.DataFrame, build: int = 37) -> np.ndarray:
+    """Per eQTL, the genotype row of its variant (by rsID or chr:pos in GRCh37,
+    or GRCh38 with build 38, with the same alleles on either strand), else -1."""
+    if build not in (37, 38):
+        raise ValueError(f"genotype build must be 37 or 38, not {build!r}")
     rows: Dict[str, List[int]] = {}
     for i, snp in enumerate(variants["snp"]):
         rows.setdefault(snp, []).append(i)
     a1, a2 = variants["a1"].to_numpy(), variants["a2"].to_numpy()
+    pos = (eqtls["pos_b37"] if build == 37
+           else pd.to_numeric(eqtls["variant_b38"].str.split("_").str[1], errors="coerce")).to_numpy()
     out = []
-    for e in eqtls.itertuples():
+    for e, p in zip(eqtls.itertuples(), pos):
         alleles = {str(e.ref), str(e.alt)}
         flipped = {a.translate(_COMPLEMENT) for a in alleles}
         candidates = list(rows.get(str(e.rsid), []))
-        if pd.notna(e.pos_b37):
-            candidates += rows.get(f"chr{e.chrom}:{int(e.pos_b37)}", [])
+        if pd.notna(p):
+            candidates += rows.get(f"chr{e.chrom}:{int(p)}", [])
         out.append(next((i for i in candidates if {a1[i], a2[i]} in (alleles, flipped)), -1))
     return np.asarray(out, dtype=np.int64)
 
@@ -1404,27 +1418,35 @@ def _genotype_calls(Zs: np.ndarray, own: np.ndarray) -> pd.DataFrame:
 
 
 def check_genotype(specs: List[Dict[str, Any]], output: Path, genotypes: Union[str, Path],
-                   eqtls: Union[str, Path], id_map: Union[str, Path]) -> Dict[str, pd.DataFrame]:
+                   eqtls: Union[str, Path], id_map: Optional[Union[str, Path]] = None, build: int = 37,
+                   sample_ids: str = "projid") -> Dict[str, pd.DataFrame]:
     """Does each donor's expression match the genotype of the person it is
     labelled as? Over strong cis-eQTLs (e.g. GTEx cortex, scripts/gtex_eqtls.py),
     each donor is scored against every genotyped sample, as in MixupMapper
-    (Westra et al. 2011). id_map: CSV with individualID and projid (the match
-    key -> the projid in the genotype sample IDs)."""
+    (Westra et al. 2011). build: of the chr:pos variant IDs (37 or 38).
+    sample_ids (GENOTYPE_SAMPLE_IDS): "projid" with id_map, a CSV with
+    individualID and projid (the match key -> the projid in the genotype sample
+    IDs); "match" or "donor" when that key is the genotype sample ID itself."""
+    if sample_ids not in GENOTYPE_SAMPLE_IDS:
+        raise ValueError(f"sample_ids must be one of {GENOTYPE_SAMPLE_IDS}, not {sample_ids!r}")
     variants, samples, dosage = read_genotypes(genotypes)
     eqtl = pd.read_csv(eqtls, sep="\t", dtype={"chrom": str, "rsid": str, "gene_id": str})
-    eqtl["row"] = _match_eqtls(eqtl, variants)
+    eqtl["row"] = _match_eqtls(eqtl, variants, build)
     eqtl = eqtl[eqtl["row"] >= 0].reset_index(drop=True)
-    sample_pid = _projid(samples)
+    # The key a donor's label is looked up by: the projid, or the sample ID itself
+    sample_pid = _projid(samples) if sample_ids == "projid" else _as_ids(samples)
     first = ~pd.Series(sample_pid).duplicated().to_numpy() & (sample_pid != "")
     samples, sample_pid, dosage = samples[first], sample_pid[first], dosage[:, first]
     with np.errstate(invalid="ignore", divide="ignore"):
         Zall = ((dosage - dosage.mean(axis=1, keepdims=True)) / dosage.std(axis=1, keepdims=True)).T
-    logger.info(f"genotypes: {len(samples)} samples, {len(variants)} variants; {len(eqtl)} eQTL pairs found "
-                f"({eqtl['gene_id'].nunique()} genes)")
-    ids = pd.read_csv(id_map, dtype=str, usecols=["individualID", "projid"]).dropna()
-    to_pid = pd.Series(_projid(ids["projid"]), index=ids["individualID"].to_numpy())
-    to_pid = to_pid[~to_pid.index.duplicated()]
+    logger.info(f"genotypes: {len(samples)} samples, {len(variants)} variants (GRCh{build}); {len(eqtl)} eQTL pairs "
+                f"found ({eqtl['gene_id'].nunique()} genes); donors labelled by {sample_ids}")
+    if sample_ids == "projid":
+        ids = pd.read_csv(id_map, dtype=str, usecols=["individualID", "projid"]).dropna()
+        to_pid = pd.Series(_projid(ids["projid"]), index=ids["individualID"].to_numpy())
+        to_pid = to_pid[~to_pid.index.duplicated()]
     sample_index = pd.Series(np.arange(len(samples)), index=sample_pid)
+    id_col = "projid" if sample_ids == "projid" else "sample"
     restricted = _restricted(output)
 
     summary, features, sex_rows, hist, by_person = [], [], [], [], {}
@@ -1432,7 +1454,13 @@ def check_genotype(specs: List[Dict[str, Any]], output: Path, genotypes: Union[s
         scan = Scan(spec)
         donors = scan.donors
         match = donors["match"] if "match" in donors else pd.Series([np.nan] * len(donors))
-        label_pid = match.map(to_pid).fillna("").to_numpy(dtype=object)
+        if sample_ids == "projid":
+            label_pid = match.map(to_pid).fillna("").to_numpy(dtype=object)
+        else:
+            for key, values in (("match", match), ("donor", donors["donor"])):
+                logger.info(f"[{scan.name}] donors whose {key} is a genotype sample ID: "
+                            f"{int(pd.Series(_as_ids(values)).isin(sample_index.index).sum())} of {len(donors)}")
+            label_pid = _as_ids(match if sample_ids == "match" else donors["donor"])
         own = sample_index.reindex(label_pid).fillna(-1).to_numpy(dtype=np.int64)
         gid = pd.Series(np.arange(len(scan.genes)), index=scan.genes["gene_id"].fillna(""))
         gid = gid[~gid.index.duplicated()]
@@ -1467,7 +1495,8 @@ def check_genotype(specs: List[Dict[str, Any]], output: Path, genotypes: Union[s
             mutual += int(calls.at[j, "best_projid"] == label_pid[i] and calls.at[j, "call"] == "other person")
         confident = calls["call"].isin(["own genotype", "other person", "identified"])
         same_twice = int(calls.loc[confident, "best_projid"].duplicated(keep=False).sum())
-        calls.drop(columns="best").to_csv(restricted / f"genotype_calls_{scan.name}.tsv", sep="\t", index=False)
+        calls.drop(columns="best").rename(columns={"label_projid": f"label_{id_col}", "best_projid": f"best_{id_col}"}) \
+            .to_csv(restricted / f"genotype_calls_{scan.name}.tsv", sep="\t", index=False)
         for m, pid, c in zip(match, calls["best_projid"], calls["call"]):
             if isinstance(m, str) and c in ("own genotype", "other person", "identified"):
                 by_person.setdefault(m, {})[scan.name] = pid
@@ -1537,16 +1566,20 @@ def check_genotype(specs: List[Dict[str, Any]], output: Path, genotypes: Union[s
 
 def run_check(check: str, spec_paths: Sequence[Union[str, Path]], output: Optional[Union[str, Path]] = None,
               mathys2019: Optional[Union[str, Path]] = None, genotypes: Optional[Union[str, Path]] = None,
-              eqtls: Optional[Union[str, Path]] = None, id_map: Optional[Union[str, Path]] = None) -> Path:
+              eqtls: Optional[Union[str, Path]] = None, id_map: Optional[Union[str, Path]] = None,
+              genotype_build: int = 37, sample_ids: str = "projid") -> Path:
     if check not in CHECKS:
         raise ValueError(f"Unknown check {check!r}; one of {CHECKS}")
     specs = [load_qc_spec(p) for p in spec_paths]
     if check == "genotype":
-        if not (genotypes and eqtls and id_map):
-            raise ValueError("genotype needs --genotypes, --eqtls and --id-map")
+        if not (genotypes and eqtls):
+            raise ValueError("genotype needs --genotypes and --eqtls")
+        if sample_ids == "projid" and not id_map:
+            raise ValueError("genotype with --sample-ids projid needs --id-map")
         output = Path(output or Path("data/v2/qc") / check)
         output.mkdir(parents=True, exist_ok=True)
-        _write_tables(check_genotype(specs, output, genotypes, eqtls, id_map), output, check, spec_paths)
+        _write_tables(check_genotype(specs, output, genotypes, eqtls, id_map, build=genotype_build,
+                                     sample_ids=sample_ids), output, check, spec_paths)
         return output
     if check in MULTI_CHECKS:
         if len(specs) < 2:

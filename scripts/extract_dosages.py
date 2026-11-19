@@ -4,12 +4,13 @@
 The input is PLINK 1 dosage files (format=1, no header: SNP A1 A2 then one
 dosage per sample in .fam order), one per chromosome, as for ROSMAP's
 Affymetrix 6 imputation (GRCh37; SNP IDs are rsIDs or chrN:pos). A variant is
-kept when its ID is an eQTL's rsID or its GRCh37 chrN:pos (scripts/gtex_eqtls.py).
-The output is a gzipped TSV: snp, a1, a2, then one column per sample (the
-.fam IIDs). It holds genotypes: keep it with the restricted data. Only counts
-are printed.
+kept when its ID is an eQTL's rsID or its chrN:pos (scripts/gtex_eqtls.py), in
+GRCh37 or, with --build 38, GRCh38 (e.g. PsychAD's merged genotypes from
+ad-prs, whose IDs are chrN:pos in GRCh38). The output is a gzipped TSV: snp,
+a1, a2, then one column per sample (the .fam IIDs). It holds genotypes: keep
+it with the restricted data. Only counts are printed.
 
-    python scripts/extract_dosages.py EQTLS DOSAGE_PATTERN FAM OUTPUT [--processes 8]
+    python scripts/extract_dosages.py EQTLS DOSAGE_PATTERN FAM OUTPUT [--build 37] [--processes 8]
 
 DOSAGE_PATTERN contains {chr}, e.g.
 .../amp-ad_rosmap_rush-broad_affymetrixgenechip6_imputed_chr{chr}.dosage.gz
@@ -44,16 +45,19 @@ def main() -> None:
     parser.add_argument("dosage_pattern")
     parser.add_argument("fam", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--build", type=int, choices=(37, 38), default=37,
+                        help="genome build of the chrN:pos IDs (default 37)")
     parser.add_argument("--processes", type=int, default=8)
     args = parser.parse_args()
 
     eqtls = pd.read_csv(args.eqtls, sep="\t", dtype={"chrom": str, "rsid": str})
+    eqtls["pos_b38"] = eqtls["variant_b38"].str.split("_").str[1].astype(int)
     iids = pd.read_csv(args.fam, sep=r"\s+", header=None, dtype=str)[1].tolist()
     jobs = []
     for chrom in [str(c) for c in range(1, 23)]:
         here = eqtls[eqtls["chrom"] == chrom]
         keys = {s.encode() for s in here["rsid"].dropna()}
-        keys |= {f"chr{chrom}:{int(p)}".encode() for p in here["pos_b37"].dropna()}
+        keys |= {f"chr{chrom}:{int(p)}".encode() for p in here[f"pos_b{args.build}"].dropna()}
         if keys:
             jobs.append((chrom, args.dosage_pattern.format(chr=chrom), keys, len(iids)))
     results = {}

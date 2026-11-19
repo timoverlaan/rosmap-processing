@@ -161,11 +161,16 @@ def test_metadata_and_identity(setup):
     assert compare[compare["genes"] == "all"]["pearson_t"].min() > 0
 
 
-def test_genotype_check_finds_swaps(tmp_path):
+GENO_DONORS, GENO_PERSONS, GENO_EQTLS = 60, 100, 150
+
+
+def _genotype_setup(tmp_path):
     """60 donors, 100 genotyped persons, 150 strong eQTLs. Donor 10's sample is
-    person 80's; donors 20 and 21 are swapped; donor 30 has no ID mapping."""
+    person 80's; donors 20 and 21 are swapped; donor 30 has no genotyped
+    label. Writes the counts, the scan and eqtls.tsv; returns the dosages
+    (persons x eQTLs)."""
     rng = np.random.default_rng(7)
-    n_donors, n_persons, k = 60, 100, 150
+    n_donors, n_persons, k = GENO_DONORS, GENO_PERSONS, GENO_EQTLS
     dosage = rng.binomial(2, rng.uniform(0.25, 0.5, size=k), size=(n_persons, k)).astype(float)
     true = np.arange(n_donors)
     true[10], true[20], true[21] = 80, 21, 20
@@ -203,15 +208,7 @@ def test_genotype_check_finds_swaps(tmp_path):
           "mt_genes": str(tmp_path / "mt.txt"), "x_genes": str(tmp_path / "x.txt"), "y_genes": str(tmp_path / "y.txt")}
     (tmp_path / "qc.yaml").write_text(yaml.safe_dump(qc))
     data_qc.run_scan(tmp_path / "qc.yaml")
-
-    # Half the variants are named by rsID, half by GRCh37 chr:pos; a quarter
-    # of the eQTLs give the alleles on the other strand
-    snp = [f"rs{i}" if i % 2 else f"chr1:{1000 + i}" for i in range(k)]
-    geno = pd.DataFrame(dosage.T, columns=[f"{'ROS' if p % 2 else 'MAP'}{p:08d}" for p in range(n_persons)])
-    geno.insert(0, "snp", snp)
-    geno.insert(1, "a1", "A")
-    geno.insert(2, "a2", "G")
-    geno.to_csv(tmp_path / "geno.tsv.gz", sep="\t", index=False)
+    # A quarter of the eQTLs give the alleles on the other strand
     pd.DataFrame({"gene_id": gene_ids[len(NAMED):len(NAMED) + k], "symbol": [f"E{i}" for i in range(k)],
                   "tissue": "t", "rank": 1, "rsid": [f"rs{i}" for i in range(k)],
                   "variant_b38": [f"chr1_{5000 + i}_A_G_b38" for i in range(k)], "chrom": "1",
@@ -219,17 +216,59 @@ def test_genotype_check_finds_swaps(tmp_path):
                   "ref": ["T" if i % 4 == 0 else "A" for i in range(k)],
                   "alt": ["C" if i % 4 == 0 else "G" for i in range(k)],
                   "maf": 0.3, "pvalue": 1e-20, "nes": 1.0}).to_csv(tmp_path / "eqtls.tsv", sep="\t", index=False)
+    return dosage
+
+
+def _write_dosages(path, dosage, snp, samples):
+    geno = pd.DataFrame(dosage.T, columns=samples)
+    geno.insert(0, "snp", snp)
+    geno.insert(1, "a1", "A")
+    geno.insert(2, "a2", "G")
+    geno.to_csv(path, sep="\t", index=False)
+
+
+def _assert_swaps_found(out, id_col):
+    n_donors = GENO_DONORS
+    s = pd.read_csv(out / "genotype_summary.tsv", sep="\t").iloc[0]
+    assert s["n_eqtl_pairs"] == GENO_EQTLS and s["n_genotyped_label"] == n_donors - 1
+    assert s["n_other_person"] == 3 and s["n_other_person_in_dataset"] == 2 and s["n_mutual_swaps"] == 1
+    assert s["n_own_genotype"] == n_donors - 4 and s["n_identified"] == 1
+    calls = pd.read_csv(out / "restricted" / "genotype_calls_qc.tsv", sep="\t", dtype=str).set_index("donor")
+    assert calls.loc["R020", "best_is_donor"] == "R021"
+    return calls[["call", f"best_{id_col}"]]
+
+
+def test_genotype_check_finds_swaps(tmp_path):
+    """ROSMAP-style: samples named ROS/MAP + projid, labels mapped to projids;
+    half the variants named by rsID, half by GRCh37 chr:pos."""
+    dosage = _genotype_setup(tmp_path)
+    n_persons, k = GENO_PERSONS, GENO_EQTLS
+    _write_dosages(tmp_path / "geno.tsv.gz", dosage, [f"rs{i}" if i % 2 else f"chr1:{1000 + i}" for i in range(k)],
+                   [f"{'ROS' if p % 2 else 'MAP'}{p:08d}" for p in range(n_persons)])
     pd.DataFrame({"individualID": [f"R{p:03d}" for p in range(n_persons)],
                   "projid": [f"{p:08d}" for p in range(n_persons)]}).to_csv(tmp_path / "ids.csv", index=False)
 
     out = data_qc.run_check("genotype", [tmp_path / "qc.yaml"], output=tmp_path / "genotype",
                             genotypes=tmp_path / "geno.tsv.gz", eqtls=tmp_path / "eqtls.tsv",
                             id_map=tmp_path / "ids.csv")
-    s = pd.read_csv(out / "genotype_summary.tsv", sep="\t").iloc[0]
-    assert s["n_eqtl_pairs"] == k and s["n_genotyped_label"] == n_donors - 1
-    assert s["n_other_person"] == 3 and s["n_other_person_in_dataset"] == 2 and s["n_mutual_swaps"] == 1
-    assert s["n_own_genotype"] == n_donors - 4 and s["n_identified"] == 1
-    calls = pd.read_csv(out / "restricted" / "genotype_calls_qc.tsv", sep="\t", dtype=str).set_index("donor")
-    assert calls.loc["R010", "call"] == "other person" and calls.loc["R010", "best_projid"] == "80"
-    assert calls.loc["X030", "call"] == "identified" and calls.loc["X030", "best_projid"] == "30"
-    assert calls.loc["R020", "best_is_donor"] == "R021"
+    calls = _assert_swaps_found(out, "projid")
+    assert calls.loc["R010"].tolist() == ["other person", "80"]
+    assert calls.loc["X030"].tolist() == ["identified", "30"]
+
+
+def test_genotype_check_with_sample_ids_and_grch38(tmp_path):
+    """PsychAD-style: the samples are named by the donors' match key and the
+    variants by GRCh38 chr:pos (half by rsID); no ID map."""
+    dosage = _genotype_setup(tmp_path)
+    n_persons, k = GENO_PERSONS, GENO_EQTLS
+    _write_dosages(tmp_path / "geno.tsv.gz", dosage, [f"rs{i}" if i % 2 else f"chr1:{5000 + i}" for i in range(k)],
+                   [f"R{p:03d}" for p in range(n_persons)])
+    kwargs = dict(genotypes=tmp_path / "geno.tsv.gz", eqtls=tmp_path / "eqtls.tsv", sample_ids="match")
+    out = data_qc.run_check("genotype", [tmp_path / "qc.yaml"], output=tmp_path / "genotype", genotype_build=38,
+                            **kwargs)
+    calls = _assert_swaps_found(out, "sample")
+    assert calls.loc["R010"].tolist() == ["other person", "R080"]
+    assert calls.loc["X030"].tolist() == ["identified", "R030"]
+    # GRCh37 positions find only the rsID-named half
+    out = data_qc.run_check("genotype", [tmp_path / "qc.yaml"], output=tmp_path / "genotype37", **kwargs)
+    assert pd.read_csv(out / "genotype_summary.tsv", sep="\t").iloc[0]["n_eqtl_pairs"] == k // 2

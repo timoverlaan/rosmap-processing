@@ -359,7 +359,8 @@ get an ordered legend rather than a colour bar. Writes `umap_<gene set>.png`, `u
 python -m rosmap_processing pipeline qc-scan config/data_qc/<name>.yaml [--overwrite]
 python -m rosmap_processing pipeline qc-check CHECK config/data_qc/<name>.yaml [...] \
     [--output DIR] [--mathys2019 data/mathys2019_DEGs.csv] \
-    [--genotypes DOSAGES.tsv.gz --eqtls data/v2/reference/gtex_cortex_eqtls.tsv [--id-map CLINICAL.csv]]
+    [--genotypes DOSAGES.tsv.gz --eqtls data/v2/reference/gtex_cortex_eqtls.tsv [--id-map CLINICAL.csv] \
+     [--genotype-build 37|38] [--sample-ids projid|match|donor]]
 ```
 How well a count file was processed. A QC spec names the dataset block of a
 batch-effects spec (count file, gene map, donor, cell types, covariates) and
@@ -389,8 +390,17 @@ strong cis-eQTLs, as MixupMapper does (Westra et al. 2011). The eQTLs are the
 independent GTEx v8 cortex eQTLs of the 2,000 strongest eGenes
 (`scripts/gtex_eqtls.py`, public API). `--genotypes` is the dosage of every
 genotyped person at those variants (`scripts/extract_dosages.py`, from
-ROSMAP's imputed Affymetrix 6 dosage files; restricted). A donor's label is
-its match key mapped to a projid through `--id-map`. Features are
+ROSMAP's imputed Affymetrix 6 dosage files; restricted), matched to the eQTLs
+by rsID or by chrN:pos in `--genotype-build` (37 by default). With
+`--sample-ids projid` (the default), a donor's label is its match key mapped
+to a projid through `--id-map`, and the projid is read from the genotype
+sample IDs (ROS/MAP + projid). With `match` or `donor`, that key is the
+genotype sample ID itself (no ID map); the restricted calls then name
+`label_sample` and `best_sample` instead of `label_projid` and `best_projid`.
+PsychAD has its own genotypes (ad-prs: four sources merged, GRCh38, samples
+named by individualID): `--genotype-build 38 --sample-ids match`, run by `sbatch
+slurm/qc_check.sh genotype-psychad config/data_qc/psychad.yaml` into
+`data/v2/qc/genotype_psychad/`. Features are
 (eQTL, layer): the pooled nuclei of a donor and each cell type, as log-CPM with
 the top expression PCs removed. Each feature's eQTL effect r is estimated over
 the labelled donors, leaving out the donor being scored, and only features with

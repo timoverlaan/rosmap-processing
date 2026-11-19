@@ -289,6 +289,11 @@ def main():
                                  help="genotype: eQTL table from scripts/gtex_eqtls.py")
     qc_check_parser.add_argument("--id-map", type=Path, default=Path("data/v2/download/ROSMAP/ROSMAP_clinical.csv"),
                                  help="genotype: CSV with individualID and projid (default: the ROSMAP clinical CSV)")
+    qc_check_parser.add_argument("--genotype-build", type=int, choices=(37, 38), default=37,
+                                 help="genotype: build of the chrN:pos variant IDs in --genotypes (default 37)")
+    qc_check_parser.add_argument("--sample-ids", choices=("projid", "match", "donor"), default="projid",
+                                 help="genotype: projid = match key -> projid via --id-map, read from the sample "
+                                      "IDs (ROSMAP; default); match / donor = that key is the sample ID itself")
 
     # pipeline umap
     umap_parser = pipeline_subparsers.add_parser(
@@ -577,7 +582,8 @@ def handle_pipeline_command(args):
     elif args.pipeline_command == "qc-check":
         from rosmap_processing.pipelines.data_qc import run_check
         run_check(args.check, args.specs, output=args.output, mathys2019=args.mathys2019,
-                  genotypes=args.genotypes, eqtls=args.eqtls, id_map=args.id_map)
+                  genotypes=args.genotypes, eqtls=args.eqtls, id_map=args.id_map,
+                  genotype_build=args.genotype_build, sample_ids=args.sample_ids)
 
     elif args.pipeline_command == "umap":
         from rosmap_processing.pipelines.umap_plots import run_umap

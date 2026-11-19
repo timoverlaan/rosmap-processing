@@ -6,6 +6,7 @@
 #   sbatch slurm/qc_check.sh sex config/data_qc/*.yaml
 #   sbatch slurm/qc_check.sh identity config/data_qc/{rosmap_mit,rosmap_green,diverse_cohorts,psychad}.yaml
 #   sbatch slurm/qc_check.sh genotype config/data_qc/{rosmap_mit,rosmap_green,diverse_cohorts,psychad}.yaml
+#   sbatch slurm/qc_check.sh genotype-psychad config/data_qc/psychad.yaml
 #SBATCH --account=daic-eemcs-insy-prb
 #SBATCH --partition=all
 #SBATCH --time=06:00:00
@@ -33,6 +34,15 @@ case "$CHECK" in
         rp pipeline qc-check genotype "$@" \
             --genotypes data/v2/genotypes/restricted/rosmap_imputed_eqtl_dosages.tsv.gz \
             --eqtls data/v2/reference/gtex_cortex_eqtls.tsv
+        ;;
+    genotype-psychad)
+        # PsychAD against its own merged genotypes (ad-prs; GRCh38 chrN:pos
+        # IDs, samples named by individualID, the match key), apart from the
+        # ROSMAP-genotype results in data/v2/qc/genotype/
+        rp pipeline qc-check genotype "$@" \
+            --genotypes data/v2/genotypes/restricted/psychad_eqtl_dosages.tsv.gz \
+            --eqtls data/v2/reference/gtex_cortex_eqtls.tsv \
+            --genotype-build 38 --sample-ids match --output data/v2/qc/genotype_psychad
         ;;
     *)
         status=0
