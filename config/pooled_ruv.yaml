@@ -3,7 +3,9 @@
 # config/pooled_pseudobulk.yaml (read, never written):
 #   sbatch slurm/pooled_pseudobulk.sh config/pooled_ruv.yaml   # [--overwrite]
 # The settings other than the ruv ones are those of config/pooled_pseudobulk.yaml.
-output_dir: data/v2/pooled_ruv
+# First run (job 158842, data/v2/pooled_ruv): k up to 24, controls chosen by
+# replicate top-1 too; see ruv_method_controls.
+output_dir: data/v2/pooled_ruv_2
 pseudobulk: data/v2/pooled_pseudobulk/pseudobulk.h5ad
 donor_table: data/v2/donors/donor_table.tsv
 min_cells: 10          # nuclei per donor x cell type for a sample
@@ -18,11 +20,16 @@ batch_split:
 umap: true
 umap_methods: [none, regress, anchor, ruv]   # rows of umap/<cell type>.png
 
-# RUV-III: k and the control genes chosen per cell type by cross-fitted
-# replicate top-1 (ruv_scan.tsv has the curve). 16 and 24 show whether it
-# levels off after 12.
-ruv_k: [1, 2, 4, 8, 12, 16, 24]
+# RUV-III: k chosen per cell type by cross-fitted replicate top-1
+# (ruv_scan.tsv has the curve). In the first run top-1 still rose at k = 24,
+# the largest k tried, in every cell type; 32 and 48 show where it levels off.
+ruv_k: [1, 2, 4, 8, 12, 16, 24, 32, 48]
 ruv_controls: [empirical, all]   # empirical: the half of the genes least associated with dementia
+# Method ruv uses the empirical controls; all genes stay in the scan for
+# comparison. In the first run, all genes gained at most 0.02 cross-fitted
+# top-1, but at k = 24 the t of dementia correlated 0.77 with the reference
+# (0.64 in Inh and Oli), vs 0.97 with the empirical controls (mean over cell types).
+ruv_method_controls: empirical
 ruv_control_share: 0.5
 ruv_tolerance: 0.005
 # Pseudo-replicates for the batches without bridges (SEA-AD, PsychAD's Mount

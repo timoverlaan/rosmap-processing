@@ -176,7 +176,16 @@ def test_pooled_pseudobulk_end_to_end(tmp_path):
 def test_batch_split_by_brain_bank(tmp_path):
     """b's donors come from two brain banks, one with extra offsets; with b
     split by brain bank, regress removes them and regress_dataset does not."""
-    out = run_pooled_pseudobulk(_setup(tmp_path, split=True))
+    path = _setup(tmp_path, split=True)
+    spec = yaml.safe_load(path.read_text())
+    path.write_text(yaml.safe_dump({**spec, "ruv_method_controls": "all"}))
+    out = run_pooled_pseudobulk(path)
+    scan = pd.read_csv(out / "ruv_scan.tsv", sep="\t")
+    assert set(scan.loc[scan["chosen"], "controls"]) == {"all"}      # ruv_method_controls
+    assert set(scan["controls"]) == {"all", "empirical"}             # both still in the scan
+    with pytest.raises(ValueError):
+        path.write_text(yaml.safe_dump({**spec, "ruv_method_controls": "housekeeping"}))
+        run_pooled_pseudobulk(path, overwrite=True)
     samples = pd.read_csv(out / "samples.tsv", sep="	")
     assert set(samples["batch"]) == {"a", "b:Rush", "b:Sinai", "c"}
     m = pd.read_csv(out / "metrics.tsv", sep="	")

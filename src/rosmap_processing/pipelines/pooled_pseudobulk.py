@@ -36,7 +36,8 @@ persons and holds the harmonized covariates.
               genes, Y - W alpha. k (ruv_k) and the control genes (all, or
               empirical: the half least associated with the disease in the
               reference model) are chosen per cell type by cross-fitted
-              replicate top-1 (ruv_scan.tsv)
+              replicate top-1 (ruv_scan.tsv); or only k, within the control
+              set ruv_method_controls
    and how each does:
      mixing           share of the PC variance that the dataset, the batch,
                       and within a split dataset its split column explain
@@ -133,6 +134,7 @@ DEFAULTS: Dict[str, Any] = {
     # without bridges, which need factors of their own)
     "ruv_k": [1, 2, 4, 8, 12],
     "ruv_controls": ["empirical", "all"],
+    "ruv_method_controls": None,  # the control set of method ruv (k chosen within it); None: chosen too
     "ruv_control_share": 0.5,    # empirical: this share of genes, least associated with the disease
     "ruv_tolerance": 0.005,
     # pseudo-replicates: per batch, the mean of the samples (at least
@@ -194,6 +196,9 @@ def load_spec(path: Union[str, Path]) -> Dict[str, Any]:
     bad = [c for c in spec["ruv_controls"] if c not in RUV_CONTROLS]
     if not spec["ruv_controls"] or bad:
         raise ValueError(f"ruv_controls: one or more of {RUV_CONTROLS}, not {spec['ruv_controls']}")
+    if spec["ruv_method_controls"] is not None and spec["ruv_method_controls"] not in spec["ruv_controls"]:
+        raise ValueError(f"ruv_method_controls: one of ruv_controls {spec['ruv_controls']} or null, "
+                         f"not {spec['ruv_method_controls']}")
     if not spec["ruv_k"] or any(int(k) < 1 for k in spec["ruv_k"]):
         raise ValueError(f"ruv_k: numbers of factors of at least 1, not {spec['ruv_k']}")
     return spec
@@ -768,7 +773,8 @@ def ruv_scan(celltype: str, sub: pd.DataFrame, Y: np.ndarray, spec, rng: np.rand
     metrics are of the fit with all persons. The choice: of those within
     ruv_tolerance of the best cross-fitted top-1 over all pairs of datasets,
     the first control set of ruv_controls and the most factors (the
-    replicates cannot see the batches without bridges).
+    replicates cannot see the batches without bridges); with
+    ruv_method_controls, only among that control set's.
 
     Returns None without replicate sets, else rows (ruv_scan.tsv), choice
     (controls, k), the corrected values Y and W of the choice, its alpha and
@@ -831,12 +837,13 @@ def ruv_scan(celltype: str, sub: pd.DataFrame, Y: np.ndarray, spec, rng: np.rand
                           value=corr, n=len(first)),
                      dict(base, metric="disease_share_fdr05", label="no batch term",
                           value=float((bm.bh_fdr(pv) < 0.05).mean()), n=len(first))]
-    valid = {cfg: s for cfg, s in score.items() if np.isfinite(s)}
+    pool = [cfg for cfg in configs if spec["ruv_method_controls"] in (None, cfg[0])] or configs
+    valid = {cfg: score[cfg] for cfg in pool if np.isfinite(score[cfg])}
     if valid:
         best = max(valid.values())
-        choice = next(cfg for cfg in configs if cfg in valid and valid[cfg] >= best - float(spec["ruv_tolerance"]))
+        choice = next(cfg for cfg in pool if cfg in valid and valid[cfg] >= best - float(spec["ruv_tolerance"]))
     else:
-        choice = (configs[0][0], max(ks))
+        choice = pool[0]
         logger.warning(f"{celltype}: ruv: no replicates to choose k by; k = {choice[1]}")
     for r in rows:
         r["chosen"] = (r["controls"], r["k"]) == choice
