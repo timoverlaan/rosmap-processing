@@ -27,6 +27,16 @@ persons and holds the harmonized covariates.
      anchor   per gene, the batch offsets that best explain the differences
               between the same persons measured in two batches (purely
               technical); batches without such persons are centered
+     ruv      RUV-III (as ruv::RUVIII): k unwanted factors alpha from the
+              replicate residuals (each person's samples minus their mean)
+              and, for the batches without such persons, pseudo-replicates
+              (RUV-III-PRPS: per batch, the mean of the samples of one
+              dementia x sex x age band group, linked across batches;
+              weighted by sqrt(samples)); per sample W from the control
+              genes, Y - W alpha. k (ruv_k) and the control genes (all, or
+              empirical: the half least associated with the disease in the
+              reference model) are chosen per cell type by cross-fitted
+              replicate top-1 (ruv_scan.tsv)
    and how each does:
      mixing           share of the PC variance that the dataset, the batch,
                       and within a split dataset its split column explain
@@ -40,23 +50,39 @@ persons and holds the harmonized covariates.
                       share of the candidates, and the mean correlation with
                       their own vs other persons' profiles. The anchor
                       offsets are cross-fitted: a person's offsets are
-                      estimated without their pairs (n_folds folds)
-     disease          the reference model: one sample per person (the one
+                      estimated without their pairs (n_folds folds); so are
+                      the ruv factors (a fold's persons are singletons in M
+                      and left out of the pseudo-replicates)
+     disease         the reference model: one sample per person (the one
                       with the most nuclei), log2-CPM ~ disease + adjust +
                       batch (de_pooled.tsv); per dataset alone (with its
                       batches); and per correction without the batch term.
                       Share of genes at FDR < 0.05 and the correlation of the
                       t statistics with the reference model's
      offsets          per batch, the size of each method's offsets and how
-                      the center and regress offsets correlate with the
-                      anchor (technical) ones
+                      the center, regress and ruv (the batch mean of what it
+                      removes) offsets correlate with the anchor (technical)
+                      ones
+     ruv_scan         per k and control gene set: cross-fitted replicate
+                      top-1 and rank share, pc_r2 and disease metrics; the
+                      chosen one
+     ruv_diagnostic   the within-person differences of the persons in two
+                      batches: the shares of their sum of squares that batch
+                      offsets, the top k components of the remainder (and the
+                      same for a permuted remainder) and the rest explain
+     ruv_factors      the top remainder components (pair scores) and the
+                      ruv W (per sample) against sample QC (nuclei, library
+                      size, UMIs per nucleus): correlations only
 5. With umap: true, per cell type a UMAP of the PCs of each of umap_methods,
    coloured by batch, dementia, sex and age, and with the same person's
    samples in two datasets joined by a line (umap/<cell type>.png), and all
    cell types coloured by batch (umap/overview.png). No donor IDs.
 
 Aggregate outputs in output_dir: samples.tsv, genes.tsv, metrics.tsv,
-disease.tsv, de_pooled.tsv (per gene), offsets.tsv, umap/, provenance.json.
+disease.tsv, de_pooled.tsv (per gene), offsets.tsv, ruv_scan.tsv,
+ruv_diagnostic.tsv, ruv_factors.tsv, umap/, provenance.json. With the spec
+key pseudobulk, an existing pseudobulk.h5ad is read from there (and never
+written), so another output_dir can reuse it.
 
 Run: python -m rosmap_processing.pipelines.pooled_pseudobulk config/pooled_pseudobulk.yaml
 """
@@ -99,10 +125,29 @@ DEFAULTS: Dict[str, Any] = {
     "umap": True,
     "umap_methods": ["none", "regress_dataset", "regress"],
     "umap_neighbors": 15,
+    "pseudobulk": None,      # an existing pseudobulk.h5ad to read (never written) instead of output_dir's
+    # RUV-III (method ruv): numbers of unwanted factors and control gene sets
+    # to try (in order of preference), chosen per cell type by cross-fitted
+    # replicate top-1; of those within ruv_tolerance of the best, the first
+    # control set and the most factors (the replicates cannot see the batches
+    # without bridges, which need factors of their own)
+    "ruv_k": [1, 2, 4, 8, 12],
+    "ruv_controls": ["empirical", "all"],
+    "ruv_control_share": 0.5,    # empirical: this share of genes, least associated with the disease
+    "ruv_tolerance": 0.005,
+    # pseudo-replicates: per batch, the mean of the samples (at least
+    # ruv_prps_min) of one group of ruv_prps_by (numeric ones in
+    # ruv_prps_bands), linked across batches; weighted by sqrt(samples)
+    "ruv_prps_by": ["dementia", "sex", "age_capped"],
+    "ruv_prps_bands": [70, 80, 90],
+    "ruv_prps_min": 3,
+    "ruv_prps_weighted": True,
 }
 REQUIRED = ("output_dir", "donor_table", "datasets")
 DATASET_KEYS = {"counts", "layer", "gene_map", "donor", "celltype"}
-METHODS = ("none", "center", "regress", "regress_dataset", "anchor")
+METHODS = ("none", "center", "regress", "regress_dataset", "anchor", "ruv")
+RUV_CONTROLS = ("empirical", "all")
+RUV_REPORTED_FACTORS = 4     # unwanted factors per cell type in ruv_factors.tsv
 # Donor table columns copied to the samples (if present)
 COVARIATES = ["n_datasets", "cohort", "brain_bank", "sex", "age_death", "age_capped", "race", "hispanic",
               "pmi", "apoe4", "cogdx", "dementia", "cdr", "braak", "cerad", "thal", "adnc", "crossdis_dx"]
@@ -143,6 +188,14 @@ def load_spec(path: Union[str, Path]) -> Dict[str, Any]:
     bad = [m for m in spec["umap_methods"] if m not in METHODS]
     if bad:
         raise ValueError(f"umap_methods: {bad} are not methods ({METHODS})")
+    bad = [c for c in spec["ruv_prps_by"] if c not in COVARIATES]
+    if bad:
+        raise ValueError(f"ruv_prps_by: {bad} are not donor table covariates ({COVARIATES})")
+    bad = [c for c in spec["ruv_controls"] if c not in RUV_CONTROLS]
+    if not spec["ruv_controls"] or bad:
+        raise ValueError(f"ruv_controls: one or more of {RUV_CONTROLS}, not {spec['ruv_controls']}")
+    if not spec["ruv_k"] or any(int(k) < 1 for k in spec["ruv_k"]):
+        raise ValueError(f"ruv_k: numbers of factors of at least 1, not {spec['ruv_k']}")
     return spec
 
 
@@ -332,6 +385,113 @@ def correct_anchor(Y: np.ndarray, ds: np.ndarray, persons: np.ndarray,
     return out, offsets, set(anchored)
 
 
+def prps_groups(sub: pd.DataFrame, by: Sequence[str], bands: Sequence[float]) -> np.ndarray:
+    """Per sample, its group for the pseudo-replicates: the levels of `by`,
+    numeric columns cut at `bands`; None where one is missing."""
+    labels = np.full(len(sub), "", dtype=object)
+    ok = np.ones(len(sub), dtype=bool)
+    for c in by:
+        if c in NUMERIC:
+            x = pd.to_numeric(sub[c], errors="coerce").to_numpy(np.float64)
+            ok &= np.isfinite(x)
+            part = np.digitize(np.nan_to_num(x), np.asarray(bands, dtype=np.float64)).astype(str)
+        else:
+            ok &= sub[c].notna().to_numpy()
+            part = sub[c].astype(str).to_numpy()
+        labels = labels + "|" + part.astype(object)
+    labels[~ok] = None
+    return labels
+
+
+def ruv_factors(Y: np.ndarray, batch: np.ndarray, persons: np.ndarray, groups: Optional[np.ndarray] = None,
+                exclude=frozenset(), min_prps: int = 3, n_factors: int = 12,
+                weighted: bool = True) -> Tuple[Optional[np.ndarray], Dict[str, int]]:
+    """RUV-III's unwanted factors (ruv::RUVIII): alpha = the top n_factors
+    right singular vectors, times their singular values, of the replicate
+    residuals Y0 = residop(Y, M) (each row minus its replicate set's mean).
+
+    M: each person's samples (persons not in exclude, two or more samples;
+    the others are singletons, whose residual is 0) and, RUV-III-PRPS style,
+    pseudo-replicates: per batch and group (groups, see prps_groups), the mean
+    of its samples of persons not in exclude (at least min_prps), linked across
+    the batches that have the group. With weighted, a pseudo-replicate's
+    residual (from the sample-weighted mean of its set) is weighted by the
+    square root of its number of samples, as if each sample had a replicate.
+
+    Returns alpha (None without replicate sets) and the counts of replicate
+    sets and pseudo-replicates."""
+    blocks = []
+    members: Dict[str, List[int]] = {}
+    for i, p in enumerate(persons):
+        if p not in exclude:
+            members.setdefault(p, []).append(i)
+    n_sets = 0
+    for rows in members.values():
+        if len(rows) > 1:
+            blocks.append(Y[rows] - Y[rows].mean(axis=0))
+            n_sets += 1
+    n_prps = n_prps_sets = 0
+    if groups is not None:
+        cells: Dict[Tuple[str, str], List[int]] = {}
+        for i in range(len(Y)):
+            if groups[i] is not None and persons[i] not in exclude:
+                cells.setdefault((groups[i], batch[i]), []).append(i)
+        by_group: Dict[str, List[Tuple[np.ndarray, int]]] = {}
+        for (g, _), rows in sorted(cells.items()):
+            if len(rows) >= min_prps:
+                by_group.setdefault(g, []).append((Y[rows].mean(axis=0), len(rows)))
+        for items in by_group.values():
+            if len(items) < 2:
+                continue
+            P = np.vstack([m for m, _ in items])
+            n = np.array([c for _, c in items], dtype=np.float64) if weighted else np.ones(len(items))
+            residual = P - (n[:, None] * P).sum(axis=0) / n.sum()
+            blocks.append(np.sqrt(n)[:, None] * residual)
+            n_prps += len(items)
+            n_prps_sets += 1
+    info = dict(replicate_sets=n_sets, pseudo_replicates=n_prps, pseudo_replicate_sets=n_prps_sets)
+    if not blocks:
+        return None, info
+    Y0 = np.vstack(blocks)
+    values, U = np.linalg.eigh(Y0 @ Y0.T)
+    order = np.argsort(values)[::-1]
+    values, U = values[order], U[:, order]
+    rank = int((values > max(values[0], 0) * 1e-10).sum()) if len(values) else 0
+    if rank == 0:
+        return None, info
+    k = min(int(n_factors), rank)
+    return U[:, :k].T @ Y0, info
+
+
+def ruv_apply(Y: np.ndarray, alpha: np.ndarray, k: int,
+              controls: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
+    """Y - W alpha_k, with W = Y_c alpha_c' (alpha_c alpha_c')^-1 over the
+    control genes (all genes if None), as in ruv::RUVIII. Y is centered per
+    gene first, so the gene means stay as they are (ruv::RUVIII on uncentered
+    Y differs from this only by a constant per gene). Returns the corrected
+    values and W (samples x k)."""
+    a = alpha[:min(int(k), len(alpha))]
+    Yc = Y - Y.mean(axis=0)
+    ctl = slice(None) if controls is None else np.asarray(controls)
+    W = np.linalg.lstsq(a[:, ctl].T, Yc[:, ctl].T, rcond=None)[0].T
+    return Y - W @ a, W
+
+
+def correct_ruv(Y: np.ndarray, batch: np.ndarray, persons: np.ndarray, k: int,
+                groups: Optional[np.ndarray] = None, controls: Optional[np.ndarray] = None,
+                exclude=frozenset(), min_prps: int = 3,
+                weighted: bool = True) -> Tuple[np.ndarray, np.ndarray, Dict[str, int]]:
+    """RUV-III with k unwanted factors (ruv_factors, ruv_apply); without
+    replicate sets, the batches are centered. Returns the corrected values,
+    W and the counts of ruv_factors."""
+    alpha, info = ruv_factors(Y, batch, persons, groups, exclude, min_prps, k, weighted)
+    if alpha is None:
+        logger.warning("ruv: no replicate sets; centering instead")
+        return correct_center(Y, batch)[0], np.zeros((len(Y), 0)), info
+    out, W = ruv_apply(Y, alpha, k, controls)
+    return out, W, info
+
+
 # ---------------------------------------------------------------- metrics
 
 
@@ -497,10 +657,13 @@ def reliability_rows(celltype: str, method: str, Y: np.ndarray, ds: np.ndarray, 
 
 
 def score_methods(celltype: str, sub: pd.DataFrame, corrected: Dict[str, np.ndarray], spec,
-                  rng: np.random.Generator, Y: Optional[np.ndarray] = None):
+                  rng: np.random.Generator, Y: Optional[np.ndarray] = None,
+                  replicates: Optional[Dict[str, Dict[Tuple[str, str], Dict[str, list]]]] = None):
     """Mixing and replicate metrics of each method's matrix (samples x genes,
     rows as in sub), and each method's PCs. With Y (the uncorrected matrix),
-    the anchor method's replicate metrics are cross-fitted."""
+    the anchor method's replicate metrics are cross-fitted. replicates: per
+    method, replicate_stats computed elsewhere (e.g. cross-fitted) to use
+    instead."""
     ds = sub["dataset"].to_numpy().astype(str)
     batch = sub["batch"].to_numpy().astype(str)
     persons = sub["person_id"].to_numpy().astype(str)
@@ -515,7 +678,9 @@ def score_methods(celltype: str, sub: pd.DataFrame, corrected: Dict[str, np.ndar
             metrics.append(dict(base, metric="pc_r2", value=bm.pc_regression(p, values), chance=np.nan))
             accuracy, chance, _ = bm.classify(p, values, rng)
             metrics.append(dict(base, metric="classifier_accuracy", value=accuracy, chance=chance))
-        if method != "anchor" or Y is None:
+        if replicates is not None and method in replicates:
+            acc = replicates[method]
+        elif method != "anchor" or Y is None:
             acc = replicate_stats(Yc, ds, persons)
         else:  # cross-fitted: a person's offsets come from the other persons' pairs
             replicated = sorted({persons[i] for i, _ in _replicate_pairs(persons, batch)})
@@ -536,10 +701,262 @@ def score_methods(celltype: str, sub: pd.DataFrame, corrected: Dict[str, np.ndar
     return metrics, all_pcs
 
 
+# ---------------------------------------------------------------- RUV-III: choice and diagnostics
+
+
+def _merge_replicates(target: Dict, part: Dict) -> None:
+    for key, v in part.items():
+        acc = target.setdefault(key, {k2: [] for k2 in v})
+        for k2, values in v.items():
+            acc[k2] += values
+
+
+def _overall_replicates(acc: Dict, min_pairs: int) -> Tuple[float, float, int]:
+    """Top-1 and median rank share over all pairs of datasets with at least
+    min_pairs persons (both directions), and the number of queries."""
+    rank, cand = [], []
+    for v in acc.values():
+        if len(v["rank"]) // 2 >= min_pairs:
+            rank += v["rank"]
+            cand += v["n_candidates"]
+    if not rank:
+        return np.nan, np.nan, 0
+    rank, cand = np.array(rank, dtype=np.float64), np.array(cand, dtype=np.float64)
+    return float((rank == 0).mean()), float(np.median(rank / np.maximum(cand - 1, 1))), len(rank)
+
+
+def _disease_inputs(sub: pd.DataFrame, spec) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """As in disease_analysis: the rows of one sample per person (the most
+    nuclei) and the disease design with and without the batch; None with
+    fewer than 3 persons with or without the disease."""
+    disease, positive, adjust = spec["disease"], str(spec["disease_positive"]), list(spec["disease_adjust"])
+    usable = sub[[disease] + adjust].notna().all(axis=1).to_numpy()
+    first = np.sort(sub[usable].sort_values("n_cells", ascending=False).drop_duplicates("person_id").index.to_numpy())
+    frame = sub.loc[first]
+    n_pos = int((frame[disease].astype(str) == positive).sum())
+    if n_pos < 3 or len(frame) - n_pos < 3:
+        return None
+    return (first, _disease_design(frame, disease, positive, adjust, with_batch=True),
+            _disease_design(frame, disease, positive, adjust, with_batch=False))
+
+
+def ruv_control_sets(spec, reference_t: Optional[np.ndarray]) -> Dict[str, Optional[np.ndarray]]:
+    """The control gene sets of ruv_controls: all (None) and empirical, the
+    ruv_control_share of genes with the smallest |t| for the disease in the
+    reference model (batch as covariate); empirical is left out without it."""
+    sets: Dict[str, Optional[np.ndarray]] = {}
+    for name in spec["ruv_controls"]:
+        if name == "all":
+            sets[name] = None
+        elif reference_t is None:
+            logger.info("ruv: no disease model, so no empirical control genes")
+        else:
+            a = np.abs(reference_t)
+            ok = np.isfinite(a)
+            sets[name] = np.flatnonzero(ok & (a <= np.quantile(a[ok], float(spec["ruv_control_share"]))))
+    if not sets:
+        sets["all"] = None
+    return sets
+
+
+def ruv_scan(celltype: str, sub: pd.DataFrame, Y: np.ndarray, spec, rng: np.random.Generator,
+             disease_inputs: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None) -> Optional[Dict[str, Any]]:
+    """RUV-III with each number of factors (ruv_k) and control gene set
+    (ruv_controls). Replicate metrics are cross-fitted: n_folds folds of the
+    persons in two batches, a fold's persons singletons in M, left out of the
+    pseudo-replicates, and scored as queries. Mixing (pc_r2) and disease
+    metrics are of the fit with all persons. The choice: of those within
+    ruv_tolerance of the best cross-fitted top-1 over all pairs of datasets,
+    the first control set of ruv_controls and the most factors (the
+    replicates cannot see the batches without bridges).
+
+    Returns None without replicate sets, else rows (ruv_scan.tsv), choice
+    (controls, k), the corrected values Y and W of the choice, its alpha and
+    cross-fitted replicate_stats (acc), and the counts of ruv_factors."""
+    ds = sub["dataset"].to_numpy().astype(str)
+    batch = sub["batch"].to_numpy().astype(str)
+    persons = sub["person_id"].to_numpy().astype(str)
+    groups = prps_groups(sub, spec["ruv_prps_by"], spec["ruv_prps_bands"])
+    ks = sorted({int(k) for k in spec["ruv_k"]})
+    prps = dict(min_prps=int(spec["ruv_prps_min"]), weighted=bool(spec["ruv_prps_weighted"]))
+    alpha, info = ruv_factors(Y, batch, persons, groups, n_factors=max(ks), **prps)
+    if alpha is None:
+        logger.warning(f"{celltype}: ruv: no replicate sets or pseudo-replicates; no ruv")
+        return None
+    reference_t = None
+    if disease_inputs is not None:
+        first, X_ref, X_plain = disease_inputs
+        _, reference_t, _ = _ols(Y[first], X_ref, 1)
+    controls = ruv_control_sets(spec, reference_t)
+    configs = [(c, k) for c in controls for k in ks[::-1]]   # in order of preference
+
+    replicated = sorted({persons[i] for i, _ in _replicate_pairs(persons, batch)})
+    folds = np.arange(len(replicated)) % spec["n_folds"]
+    rng.shuffle(folds)
+    acc: Dict[Tuple[str, int], Dict] = {cfg: {} for cfg in configs}
+    for f in range(spec["n_folds"]):
+        fold = frozenset(p for p, x in zip(replicated, folds) if x == f)
+        if not fold:
+            continue
+        alpha_f, _ = ruv_factors(Y, batch, persons, groups, exclude=fold, n_factors=max(ks), **prps)
+        if alpha_f is None:
+            continue
+        for c, k in configs:
+            Yk, _ = ruv_apply(Y, alpha_f, k, controls[c])
+            _merge_replicates(acc[(c, k)], replicate_stats(Yk, ds, persons, queries=set(fold)))
+
+    mixing = _mixing_labels(ds, batch, spec["batch_split"])
+    rows: List[Dict[str, Any]] = []
+    score: Dict[Tuple[str, int], float] = {}
+    for c, k in configs:
+        n_controls = Y.shape[1] if controls[c] is None else len(controls[c])
+        base = dict(celltype=celltype, controls=c, n_controls=n_controls, k=k, n_factors=min(k, len(alpha)))
+        top1, share, n = _overall_replicates(acc[(c, k)], spec["min_pairs"])
+        score[(c, k)] = top1
+        rows += [dict(base, metric="replicate_top1", label="all pairs", value=top1, n=n),
+                 dict(base, metric="replicate_rank_share", label="all pairs", value=share, n=n)]
+        for r in _replicate_rows(celltype, "ruv", acc[(c, k)], spec["min_pairs"]):
+            if r["metric"] in ("replicate_top1", "replicate_rank_share"):
+                rows.append(dict(base, metric=r["metric"], label=r["label"], value=r["value"], n=r["n"]))
+        Yk, _ = ruv_apply(Y, alpha, k, controls[c])
+        pcs = _pca(Yk - Yk.mean(axis=0), spec["n_pcs"], spec["seed"])
+        for label, values, sel in mixing:
+            p = pcs if sel is None else pcs[sel]
+            rows.append(dict(base, metric="pc_r2", label=label, value=bm.pc_regression(p, values), n=len(values)))
+        if reference_t is not None:
+            _, t, pv = _ols(Yk[first], X_plain, 1)
+            ok = np.isfinite(t) & np.isfinite(reference_t)
+            corr = float(np.corrcoef(t[ok], reference_t[ok])[0, 1]) if ok.sum() > 2 else np.nan
+            rows += [dict(base, metric="disease_t_correlation", label="with pooled: batch as covariate",
+                          value=corr, n=len(first)),
+                     dict(base, metric="disease_share_fdr05", label="no batch term",
+                          value=float((bm.bh_fdr(pv) < 0.05).mean()), n=len(first))]
+    valid = {cfg: s for cfg, s in score.items() if np.isfinite(s)}
+    if valid:
+        best = max(valid.values())
+        choice = next(cfg for cfg in configs if cfg in valid and valid[cfg] >= best - float(spec["ruv_tolerance"]))
+    else:
+        choice = (configs[0][0], max(ks))
+        logger.warning(f"{celltype}: ruv: no replicates to choose k by; k = {choice[1]}")
+    for r in rows:
+        r["chosen"] = (r["controls"], r["k"]) == choice
+    curve = ", ".join(f"{c} k={k}: {score[(c, k)]:.3f}" for c in controls for k in ks)
+    logger.info(f"{celltype}: ruv: {info['replicate_sets']} replicate sets, {info['pseudo_replicates']} "
+                f"pseudo-replicates in {info['pseudo_replicate_sets']} sets; cross-fitted top-1 {curve}; "
+                f"chose {choice[0]} controls, k = {choice[1]}")
+    Y_ruv, W = ruv_apply(Y, alpha, choice[1], controls[choice[0]])
+    return dict(rows=rows, choice=choice, Y=Y_ruv, W=W, alpha=alpha[:W.shape[1]], acc=acc[choice], info=info)
+
+
+def _sample_qc(sub: pd.DataFrame) -> Dict[str, np.ndarray]:
+    nuclei = sub["n_cells"].to_numpy(np.float64)
+    library = sub["library_size"].to_numpy(np.float64)
+    return {"log10 nuclei": np.log10(nuclei), "log10 library size": np.log10(library),
+            "log10 UMIs per nucleus": np.log10(library / nuclei)}
+
+
+def _within(x: np.ndarray, groups: np.ndarray) -> np.ndarray:
+    s = pd.Series(np.asarray(x, dtype=np.float64))
+    return (s - s.groupby(np.asarray(groups)).transform("mean")).to_numpy()
+
+
+def _corr(x: np.ndarray, y: np.ndarray) -> float:
+    if len(x) < 3 or np.std(x) == 0 or np.std(y) == 0:
+        return np.nan
+    return float(np.corrcoef(x, y)[0, 1])
+
+
+def _factor_rows(celltype: str, source: str, scores: np.ndarray, shares: np.ndarray, qc: Dict[str, np.ndarray],
+                 groups: np.ndarray) -> List[Dict[str, Any]]:
+    """Per factor (column of scores) and QC measure: the Spearman correlation,
+    the Pearson correlation within the groups (both centered per group), and
+    the share of the factor's variance that the groups explain."""
+    rows = []
+    for f in range(scores.shape[1]):
+        s = scores[:, f]
+        within = _within(s, groups)
+        total = ((s - s.mean()) ** 2).sum()
+        group_r2 = float(1 - (within ** 2).sum() / total) if total > 0 else np.nan
+        for name, x in qc.items():
+            ok = np.isfinite(x) & np.isfinite(s)
+            if ok.sum() < 3:
+                continue
+            xw = _within(np.where(ok, x, 0.0), groups)
+            rows.append(dict(celltype=celltype, source=source, factor=f + 1, variance_share=float(shares[f]),
+                             qc=name, r_spearman=_corr(stats.rankdata(s[ok]), stats.rankdata(x[ok])),
+                             r_within_batch=_corr(within[ok], xw[ok]), batch_r2=group_r2, n=int(ok.sum())))
+    return rows
+
+
+def bridge_decomposition(celltype: str, Y: np.ndarray, sub: pd.DataFrame, ks: Sequence[int],
+                         rng: np.random.Generator, min_pairs: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """The within-person differences y_i - y_j of the persons in two batches
+    (one row per pair of their samples), as shares of their sum of squares:
+    batch_offset (least squares of y_i - y_j = o_a - o_b per gene, as
+    anchor), remainder_top_k (the top k components of what is left) and rest;
+    remainder_top_k_null: the same with each gene permuted over the pairs (no
+    shared structure). Rows of ruv_diagnostic.tsv, and of ruv_factors.tsv for
+    the top components: their pair scores against the pairs' differences in
+    sample QC, within and between pairs of batches."""
+    batch = sub["batch"].to_numpy().astype(str)
+    persons = sub["person_id"].to_numpy().astype(str)
+    pairs = _replicate_pairs(persons, batch)
+    if len(pairs) < min_pairs:
+        return [], []
+    i = np.array([a for a, _ in pairs])
+    j = np.array([b for _, b in pairs])
+    D = Y[i] - Y[j]
+    levels = sorted(set(batch[i]) | set(batch[j]))
+    pos = {b: n for n, b in enumerate(levels)}
+    Dp = np.zeros((len(pairs), len(levels)))
+    Dp[np.arange(len(pairs)), [pos[b] for b in batch[i]]] = 1.0
+    Dp[np.arange(len(pairs)), [pos[b] for b in batch[j]]] = -1.0
+    F = Dp @ (np.linalg.pinv(Dp) @ D)
+    R = D - F
+    total = float((D ** 2).sum())
+    values, U = np.linalg.eigh(R @ R.T)
+    order = np.argsort(values)[::-1]
+    values, U = np.clip(values[order], 0, None), U[:, order]
+    Rp = rng.permuted(R, axis=0)
+    null = np.sort(np.clip(np.linalg.eigvalsh(Rp @ Rp.T), 0, None))[::-1]
+    offset = float((F ** 2).sum()) / total
+    rows = []
+    for k in ks:
+        top = float(values[:k].sum()) / total
+        rows.append(dict(celltype=celltype, k=int(k), batch_offset=offset, remainder_top_k=top,
+                         rest=1 - offset - top, remainder_top_k_null=float(null[:k].sum()) / total,
+                         n_pairs=len(pairs), n_batches=len(levels), n_genes=Y.shape[1]))
+    nf = min(RUV_REPORTED_FACTORS, int((values > 0).sum()))
+    scores = U[:, :nf] * np.sqrt(values[:nf])
+    pair_type = np.array([" vs ".join(sorted((a, b))) for a, b in zip(batch[i], batch[j])])
+    qc = {name: x[i] - x[j] for name, x in _sample_qc(sub).items()}
+    factors = _factor_rows(celltype, "bridge differences: remainder component", scores, values[:nf] / total, qc,
+                           pair_type)
+    summary = ", ".join(f"top {r['k']} {r['remainder_top_k']:.3f} (null {r['remainder_top_k_null']:.3f})"
+                        for r in rows)
+    logger.info(f"{celltype}: within-person differences ({len(pairs)} pairs): batch offsets {offset:.3f} of the "
+                f"sum of squares; of the remainder, {summary}")
+    return rows, factors
+
+
+def ruv_factor_rows(celltype: str, sub: pd.DataFrame, Y: np.ndarray, W: np.ndarray,
+                    alpha: np.ndarray) -> List[Dict[str, Any]]:
+    """ruv_factors.tsv rows for the first RUV_REPORTED_FACTORS columns of W:
+    against the samples' QC, within and between batches; variance_share: the
+    share of the (centered) sum of squares that factor removes."""
+    nf = min(RUV_REPORTED_FACTORS, W.shape[1])
+    total = float(((Y - Y.mean(axis=0)) ** 2).sum())
+    shares = np.array([(W[:, f] ** 2).sum() * (alpha[f] ** 2).sum() / total for f in range(nf)])
+    return _factor_rows(celltype, "ruv W", W[:, :nf], shares, _sample_qc(sub), sub["batch"].to_numpy().astype(str))
+
+
 def analyse_celltype(celltype: str, obs: pd.DataFrame, counts: np.ndarray, genes: pd.DataFrame, spec,
-                     rng: np.random.Generator):
+                     rng: np.random.Generator, extra: Optional[Dict[str, list]] = None):
     """metrics, disease, de_pooled and offsets rows for one broad cell type,
-    and (with umap) its samples and their UMAP coordinates per method."""
+    and (with umap) its samples and their UMAP coordinates per method. extra,
+    if given, receives the rows of ruv_scan, ruv_diagnostic and ruv_factors.
+    The ruv method has its own random numbers, so the other methods' metrics
+    are as without it."""
     sel = ((obs["celltype"] == celltype) & (obs["n_cells"] >= spec["min_cells"])).to_numpy()
     sub = obs[sel].reset_index(drop=True)
     names = list(dict.fromkeys(sub["dataset"]))
@@ -566,26 +983,47 @@ def analyse_celltype(celltype: str, obs: pd.DataFrame, counts: np.ndarray, genes
         corrected["regress_dataset"], _ = correct_regress(Y, ds, protect, numeric)
     corrected["anchor"], offsets["anchor"], anchored = correct_anchor(Y, batch, persons)
     logger.info(f"{celltype}: anchored batches {sorted(anchored)}")
+    ruv_rng = np.random.default_rng([int(spec["seed"]), *map(ord, celltype)])
+    ruv = ruv_scan(celltype, sub, Y, spec, ruv_rng, _disease_inputs(sub, spec))
 
     metrics: List[Dict[str, Any]] = [dict(celltype=celltype, method="any", metric="n_genes", label="",
                                           value=int(keep.sum()), chance=np.nan, n=len(sub))]
     scored, all_pcs = score_methods(celltype, sub, corrected, spec, rng, Y=Y)
     metrics += scored
+    if ruv is not None:
+        corrected["ruv"] = ruv["Y"]
+        removed = Y - ruv["Y"]
+        offsets["ruv"] = {b: removed[batch == b].mean(axis=0) for b in np.unique(batch)}
+        scored, pcs = score_methods(celltype, sub, {"ruv": ruv["Y"]}, spec, ruv_rng, replicates={"ruv": ruv["acc"]})
+        metrics += scored
+        all_pcs.update(pcs)
+        metrics.append(dict(celltype=celltype, method="ruv", metric="ruv_k", label=ruv["choice"][0],
+                            value=ruv["W"].shape[1], chance=np.nan, n=len(sub)))
     metrics += reliability_rows(celltype, "any", Y, ds, persons, spec["min_pairs"])
 
     disease_rows, de = disease_analysis(celltype, corrected, sub, genes_t, spec)
 
     offset_rows = []
     dataset_of = dict(zip(batch, ds))
+    methods = ("center", "regress", "anchor") + (("ruv",) if "ruv" in offsets else ())
     for b in dict.fromkeys(batch):
         row = dict(celltype=celltype, dataset=dataset_of[b], batch=b, n_samples=int((batch == b).sum()),
                    anchored=b in anchored)
-        for method in ("center", "regress", "anchor"):
+        for method in methods:
             row[f"rms_{method}"] = float(np.sqrt(np.mean(offsets[method][b] ** 2)))
         if b in anchored:
-            for method in ("center", "regress"):
+            for method in [m for m in methods if m != "anchor"]:
                 row[f"r_{method}_vs_anchor"] = float(np.corrcoef(offsets[method][b], offsets["anchor"][b])[0, 1])
         offset_rows.append(row)
+
+    if extra is not None:
+        ks = sorted({int(k) for k in spec["ruv_k"]})
+        diagnostic, factors = bridge_decomposition(celltype, Y, sub, ks, ruv_rng, spec["min_pairs"])
+        if ruv is not None:
+            factors += ruv_factor_rows(celltype, sub, Y, ruv["W"], ruv["alpha"])
+            extra.setdefault("ruv_scan", []).extend(ruv["rows"])
+        extra.setdefault("ruv_diagnostic", []).extend(diagnostic)
+        extra.setdefault("ruv_factors", []).extend(factors)
 
     embedding = None
     if spec["umap"]:
@@ -601,7 +1039,8 @@ def method_titles(split: Dict[str, str]) -> Dict[str, str]:
     batch = "dataset" + "".join(f" + {column} in {name}" for name, column in (split or {}).items())
     return {"none": "as measured", "center": f"{batch}: means removed",
             "regress": f"{batch} regressed out", "regress_dataset": "dataset regressed out",
-            "anchor": f"{batch}: anchored on replicates"}
+            "anchor": f"{batch}: anchored on replicates",
+            "ruv": f"{batch}: RUV-III on replicates"}
 
 
 def batch_palette(obs: pd.DataFrame, datasets: Sequence[str]) -> Dict[str, str]:
@@ -791,7 +1230,13 @@ def run_pooled_pseudobulk(spec_path: Union[str, Path], overwrite: bool = False, 
 
     spec = load_spec(spec_path)
     out = Path(spec["output_dir"])
-    h5ad = out / "pseudobulk.h5ad"
+    h5ad = Path(spec["pseudobulk"]) if spec["pseudobulk"] else out / "pseudobulk.h5ad"
+    if spec["pseudobulk"]:
+        if rebuild:
+            raise ValueError(f"{spec_path} reads pseudobulk {h5ad} (never written); --rebuild needs a spec "
+                             "without 'pseudobulk'")
+        if not h5ad.exists():
+            raise FileNotFoundError(f"pseudobulk: {h5ad} does not exist")
     if (out / "metrics.tsv").exists() and not (overwrite or rebuild):
         raise FileExistsError(f"{out / 'metrics.tsv'} exists; pass --overwrite to replace the outputs")
     out.mkdir(parents=True, exist_ok=True)
@@ -846,10 +1291,11 @@ def run_pooled_pseudobulk(spec_path: Union[str, Path], overwrite: bool = False, 
     _sample_table(obs, spec["min_cells"]).to_csv(out / "samples.tsv", sep="\t", index=False)
     genes.to_csv(out / "genes.tsv", sep="\t", index=False)
     metrics, disease, de, offsets, embeddings = [], [], [], [], {}
+    extra: Dict[str, list] = {}
     for celltype in sorted(obs["celltype"].unique()):
         sel = np.flatnonzero((obs["celltype"] == celltype).to_numpy())
         m, d, g, o, e = analyse_celltype(celltype, obs.iloc[sel].reset_index(drop=True), counts[sel].toarray(),
-                                         genes, spec, rng)
+                                         genes, spec, rng, extra=extra)
         metrics += m
         disease += d
         offsets += o
@@ -863,6 +1309,8 @@ def run_pooled_pseudobulk(spec_path: Union[str, Path], overwrite: bool = False, 
     (pd.concat(de, ignore_index=True) if de else pd.DataFrame()).to_csv(out / "de_pooled.tsv", sep="\t",
                                                                           index=False)
     pd.DataFrame(offsets).to_csv(out / "offsets.tsv", sep="\t", index=False)
+    for name in ("ruv_scan", "ruv_diagnostic", "ruv_factors"):
+        pd.DataFrame(extra.get(name, [])).to_csv(out / f"{name}.tsv", sep="\t", index=False)
 
     if embeddings:
         figures = out / "umap"

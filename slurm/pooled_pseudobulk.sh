@@ -6,6 +6,8 @@
 #   sbatch slurm/pooled_pseudobulk.sh              # first run
 #   sbatch slurm/pooled_pseudobulk.sh --overwrite  # redo the analyses on the existing pseudobulk
 #   sbatch slurm/pooled_pseudobulk.sh --rebuild    # also re-read the count files
+# Another spec as the first argument, e.g. RUV-III on the same pseudobulk:
+#   sbatch slurm/pooled_pseudobulk.sh config/pooled_ruv.yaml   # -> data/v2/pooled_ruv/
 #SBATCH --account=daic-eemcs-insy-prb
 #SBATCH --partition=all
 #SBATCH --time=12:00:00
@@ -20,4 +22,6 @@ THREADS="${SLURM_CPUS_PER_TASK:-8}"
 EXTRA_BINDS="--bind config/:/opt/app/config/ --env OMP_NUM_THREADS=$THREADS --env OPENBLAS_NUM_THREADS=$THREADS --env MKL_NUM_THREADS=$THREADS"
 source slurm/common.sh
 
-rp pipeline pooled-pseudobulk config/pooled_pseudobulk.yaml "$@"
+SPEC=config/pooled_pseudobulk.yaml
+if [[ "${1:-}" == *.yaml ]]; then SPEC="$1"; shift; fi
+rp pipeline pooled-pseudobulk "$SPEC" "$@"

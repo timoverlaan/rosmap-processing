@@ -13,6 +13,10 @@ from rosmap_processing.pipelines.pooled_pseudobulk import (
     correct_anchor,
     correct_center,
     correct_regress,
+    correct_ruv,
+    prps_groups,
+    ruv_apply,
+    ruv_factors,
     run_pooled_pseudobulk,
 )
 
@@ -84,7 +88,9 @@ def _setup(tmp_path, split=False):
                 {"column": "class", "match": "^Ast$", "label": "Ast"}]
     spec = {"output_dir": str(tmp_path / "out"), "donor_table": str(tmp_path / "donor_table.tsv"),
             "min_genes": 1, "min_cells": 5, "min_cpm": 1.0, "n_pcs": 10, "chunk_size": 500, "n_folds": 3,
+            "ruv_prps_min": 2,
             "umap": split, "batch_split": {"b": "brain_bank"} if split else {},
+            "umap_methods": ["none", "regress", "anchor", "ruv"],
             "datasets": {name: {"counts": str(tmp_path / f"{name}.h5ad"),
                                 "gene_map": str(tmp_path / f"{name}.map.tsv"),
                                 "donor": "donor_key", "celltype": celltype} for name in PERSONS}}
@@ -135,8 +141,30 @@ def test_pooled_pseudobulk_end_to_end(tmp_path):
     assert pooled["n_persons"].item() == 45 + 15   # one sample per person
     assert set(disease["analysis"]) >= {"a alone", "pooled: anchor, no batch term"}
 
+    # ruv: the bridged offset and, through the pseudo-replicates, c's are removed
+    for t in ("Exc", "Ast"):
+        assert pc[(t, "ruv")] < 0.05
+        assert top1.loc[(t, "ruv"), "value"] >= 0.8
+    assert "pooled: ruv, no batch term" in set(disease["analysis"])
+    assert offsets.loc[("Exc", "b"), "r_ruv_vs_anchor"] > 0.9
+    scan = pd.read_csv(out / "ruv_scan.tsv", sep="\t")
+    assert set(scan["k"]) == {1, 2, 4, 8, 12} and set(scan["controls"]) == {"empirical", "all"}
+    assert set(scan["metric"]) >= {"replicate_top1", "replicate_rank_share", "pc_r2", "disease_t_correlation"}
+    chosen = scan[scan["chosen"]].drop_duplicates(["celltype", "controls", "k"])
+    assert sorted(chosen["celltype"]) == ["Ast", "Exc"]          # one choice per cell type
+    k_rows = m[m["metric"] == "ruv_k"].set_index("celltype")
+    assert (k_rows.loc[chosen["celltype"], "value"].to_numpy() <= chosen["k"].to_numpy()).all()
+    diagnostic = pd.read_csv(out / "ruv_diagnostic.tsv", sep="\t")
+    assert np.allclose(diagnostic[["batch_offset", "remainder_top_k", "rest"]].sum(axis=1), 1.0)
+    assert (diagnostic["batch_offset"] > 0.3).all()            # b's x4 genes dominate the within-person gaps
+    assert (diagnostic["n_pairs"] == 15).all()
+    factors = pd.read_csv(out / "ruv_factors.tsv", sep="\t")
+    assert set(factors["source"]) == {"ruv W", "bridge differences: remainder component"}
+    assert factors["r_spearman"].abs().max() <= 1.0
+
     # aggregate tables hold no person or donor IDs
-    for name in ("samples.tsv", "metrics.tsv", "disease.tsv", "offsets.tsv", "de_pooled.tsv", "genes.tsv"):
+    for name in ("samples.tsv", "metrics.tsv", "disease.tsv", "offsets.tsv", "de_pooled.tsv", "genes.tsv",
+                 "ruv_scan.tsv", "ruv_diagnostic.tsv", "ruv_factors.tsv"):
         text = (out / name).read_text()
         assert "P15" not in text and "a3" not in text and "S1" not in text
 
@@ -158,6 +186,8 @@ def test_batch_split_by_brain_bank(tmp_path):
         assert within.loc[(t, "regress_dataset"), "value"] > 0.1
         assert within.loc[(t, "regress"), "value"] < 0.05
         assert within.loc[(t, "center"), "value"] < 0.05
+        # Sinai has no bridges; its pseudo-replicates link it to Rush
+        assert within.loc[(t, "ruv"), "value"] < 0.05
     offsets = pd.read_csv(out / "offsets.tsv", sep="	").set_index(["celltype", "batch"])
     assert offsets.loc[("Exc", "b:Rush"), "anchored"] and not offsets.loc[("Exc", "b:Sinai"), "anchored"]
     disease = pd.read_csv(out / "disease.tsv", sep="	")
@@ -191,3 +221,137 @@ def test_anchor_recovers_technical_offsets_despite_composition():
     covs = pd.DataFrame({"dementia": ["yes" if p in sick else "no" for p in persons]})
     _, regress = correct_regress(Y, ds, covs, [])
     assert np.allclose(regress["b"] - regress["a"], shift, atol=0.15)
+
+
+def test_ruv_matches_ruviii_formula():
+    """Without pseudo-replicates, ruv_factors + ruv_apply are ruv::RUVIII
+    (up to a constant per gene: Y is centered first)."""
+    rng = np.random.default_rng(1)
+    n, g, k = 30, 40, 3
+    Y = rng.normal(size=(n, g)) + rng.normal(size=g)
+    persons = np.array([f"P{i // 2}" if i < 20 else f"S{i}" for i in range(n)])   # 10 pairs, 10 singletons
+    batch = np.array(["a" if i % 2 == 0 else "b" for i in range(n)])
+    ctl = np.arange(0, g, 2)
+    levels = list(dict.fromkeys(persons))
+    M = (persons[:, None] == np.array(levels)[None, :]).astype(np.float64)
+    Y0 = Y - M @ np.linalg.solve(M.T @ M, M.T @ Y)                       # residop(Y, M)
+    values, U = np.linalg.eigh(Y0 @ Y0.T)
+    alpha = U[:, np.argsort(values)[::-1][:k]].T @ Y
+    ac = alpha[:, ctl]
+    W = Y[:, ctl] @ ac.T @ np.linalg.inv(ac @ ac.T)
+    expected = Y - W @ alpha
+
+    a, info = ruv_factors(Y, batch, persons, n_factors=k)
+    assert info["replicate_sets"] == 10 and info["pseudo_replicates"] == 0
+    out, W2 = ruv_apply(Y, a, k, ctl)
+    assert W2.shape == (n, k)
+    assert np.allclose(out - out.mean(axis=0), expected - expected.mean(axis=0))
+    assert np.allclose(out.mean(axis=0), Y.mean(axis=0))                 # gene means kept
+
+
+def _bridged(rng, n_genes=200, quality=0.5):
+    """a: P0-P59, b: P30-P89; b has an offset on genes 0-19, every sample a
+    technical factor q (e.g. RNA quality) with its own loading, persons with
+    odd numbers a disease effect on genes 100-119."""
+    shift = np.zeros(n_genes)
+    shift[:20] = 1.0
+    loading = rng.normal(0, quality, n_genes)
+    disease = np.zeros(n_genes)
+    disease[100:120] = 1.0
+    persons = np.array([f"P{i}" for i in range(60)] + [f"P{i}" for i in range(30, 90)])
+    ds = np.array(["a"] * 60 + ["b"] * 60)
+    sick = np.array([int(p[1:]) % 2 == 1 for p in persons])
+    base = {p: rng.normal(0, 0.3, n_genes) for p in sorted(set(persons))}
+    q = rng.normal(0, 1, len(persons))
+    Y = np.vstack([base[p] + disease * s + shift * (d == "b") + qi * loading + rng.normal(0, 0.05, n_genes)
+                   for p, d, s, qi in zip(persons, ds, sick, q)])
+    return Y, ds, persons, sick, q
+
+
+def test_ruv_removes_a_per_sample_factor_that_anchor_leaves():
+    rng = np.random.default_rng(0)
+    Y, ds, persons, sick, q = _bridged(rng)
+    out, W, info = correct_ruv(Y, ds, persons, k=2)
+    assert info["replicate_sets"] == 30
+    assert max(abs(np.corrcoef(W[:, f], q)[0, 1]) for f in range(2)) > 0.9
+    anchored, _, _ = correct_anchor(Y, ds, persons)
+    rows_a, rows_b = np.arange(30, 60), np.arange(60, 90)                  # P30-P59 in a and in b
+
+    def gap(X):
+        return float(((X[rows_a] - X[rows_b]) ** 2).mean())
+
+    assert gap(out) < gap(anchored) / 5
+    effect = out[sick].mean(axis=0) - out[~sick].mean(axis=0)
+    assert abs(effect[100:120].mean() - 1.0) < 0.15                      # the disease effect is kept
+    assert abs(np.delete(effect, np.arange(100, 120)).mean()) < 0.1
+
+
+def test_ruv_held_out_persons_do_not_shape_the_factors():
+    """Cross-fitting: a fold's persons are singletons in M and left out of the
+    pseudo-replicates, so their values do not change the factors."""
+    rng = np.random.default_rng(2)
+    Y, ds, persons, sick, _ = _bridged(rng)
+    groups = np.where(sick, "|yes", "|no").astype(object)
+    fold = frozenset(f"P{i}" for i in range(30, 40))
+    a1, info = ruv_factors(Y, ds, persons, groups, exclude=fold, min_prps=3, n_factors=4)
+    assert info["replicate_sets"] == 20 and info["pseudo_replicates"] == 4
+    Y2 = Y.copy()
+    held = np.isin(persons, list(fold))
+    Y2[held] += rng.normal(0, 1, size=(held.sum(), Y.shape[1]))
+    a2, _ = ruv_factors(Y2, ds, persons, groups, exclude=fold, min_prps=3, n_factors=4)
+
+    def projector(a):
+        return a.T @ np.linalg.solve(a @ a.T, a)
+
+    assert np.allclose(projector(a1), projector(a2))
+    a3, _ = ruv_factors(Y2, ds, persons, groups, min_prps=3, n_factors=4)
+    assert not np.allclose(projector(a1), projector(a3))
+
+
+def test_ruv_pseudo_replicates_remove_the_offset_of_a_batch_without_bridges():
+    rng = np.random.default_rng(4)
+    n_genes = 150
+    Y, ds, persons, sick, _ = _bridged(rng, n_genes=n_genes, quality=0.0)
+    offset_c = np.zeros(n_genes)
+    offset_c[40:60] = 1.5                                                  # c: its own persons S0-S39
+    persons_c = np.array([f"S{i}" for i in range(40)])
+    sick_c = np.arange(40) % 2 == 1
+    Yc = rng.normal(0, 0.3, size=(40, n_genes)) + offset_c + rng.normal(0, 0.05, size=(40, n_genes))
+    Yc[sick_c, 100:120] += 1.0
+    Y = np.vstack([Y, Yc])
+    ds = np.concatenate([ds, ["c"] * 40])
+    persons = np.concatenate([persons, persons_c])
+    sub = pd.DataFrame({"dementia": np.where(np.concatenate([sick, sick_c]), "yes", "no"),
+                        "sex": ["female" if i % 3 else "male" for i in range(len(ds))],
+                        "age_capped": 75 + (np.arange(len(ds)) % 4) * 4})
+    groups = prps_groups(sub, ["dementia", "sex", "age_capped"], [70, 80, 90])
+    assert len(set(groups)) == 2 * 2 * 2
+
+    def c_gap(X):
+        return float((X[ds == "c", 40:60].mean() - X[ds != "c", 40:60].mean()))
+
+    with_prps, _, info = correct_ruv(Y, ds, persons, k=2, groups=groups, min_prps=3)
+    assert info["pseudo_replicate_sets"] == 8
+    without, _, _ = correct_ruv(Y, ds, persons, k=2)
+    assert abs(c_gap(without)) > 1.0
+    assert abs(c_gap(with_prps)) < 0.15
+    assert abs((with_prps[ds == "b", :20].mean() - with_prps[ds == "a", :20].mean())) < 0.1
+
+
+def test_spec_pseudobulk_reads_an_existing_one(tmp_path):
+    """pseudobulk: another output_dir reads the pseudobulk.h5ad and never writes it."""
+    path = _setup(tmp_path)
+    first = run_pooled_pseudobulk(path)
+    h5ad = first / "pseudobulk.h5ad"
+    stamp = h5ad.stat().st_mtime_ns
+    spec = yaml.safe_load(path.read_text())
+    spec.update(output_dir=str(tmp_path / "again"), pseudobulk=str(h5ad))
+    other = tmp_path / "again.yaml"
+    other.write_text(yaml.safe_dump(spec))
+    out = run_pooled_pseudobulk(other)
+    assert not (out / "pseudobulk.h5ad").exists() and h5ad.stat().st_mtime_ns == stamp
+    a = pd.read_csv(first / "metrics.tsv", sep="\t")
+    b = pd.read_csv(out / "metrics.tsv", sep="\t")
+    pd.testing.assert_frame_equal(a, b)
+    with pytest.raises(ValueError):
+        run_pooled_pseudobulk(other, rebuild=True)
