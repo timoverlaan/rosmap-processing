@@ -169,15 +169,15 @@ def vcf_samples(ranges) -> List[str]:
 
 
 def fetch_records(ranges, linear: Dict[str, List[int]], chrom: str, positions: Iterable[int],
-                  jump: int = 1 << 20) -> Iterator[Tuple[int, List[bytes]]]:
+                  jump: int = 1 << 20, chunk: int = 1 << 18) -> Iterator[Tuple[int, List[bytes]]]:
     """All records of `chrom` at the given 1-based positions, in order:
     (position, the record's tab-separated fields). Streams on between nearby
     positions and seeks (by the linear index) when the next one is more than
-    `jump` compressed bytes ahead."""
+    `jump` compressed bytes ahead; reads `chunk` bytes per range request."""
     index = linear.get(chrom)
     if not index:
         return
-    stream = BgzfLines(ranges)
+    stream = BgzfLines(ranges, chunk=chunk)
     lines: Optional[Iterator[bytes]] = None
     pending: Optional[Tuple[int, bytes]] = None  # a line read past the previous position
     for p in sorted(set(int(x) for x in positions)):

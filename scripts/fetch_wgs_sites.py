@@ -22,6 +22,7 @@ import logging
 import re
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -61,7 +62,13 @@ def main() -> None:
     parser.add_argument("--chromosomes", help="comma-separated subset (default: 1-22 and X)")
     parser.add_argument("--chrx-windows", type=int, default=60)
     parser.add_argument("--chrx-records", type=int, default=60, help="records read per chrX window")
+    parser.add_argument("--max-sites", type=int, help="at most this many eQTL sites per chromosome (a test)")
+    parser.add_argument("--chunk-kb", type=int, default=1024, help="bytes per range request")
     args = parser.parse_args()
+    started = time.time()
+
+    def log(message):
+        print(f"[{time.time() - started:6.0f} s] {message}", flush=True)
 
     syn = _login(_token())
     syn_lock = threading.Lock()
@@ -73,7 +80,7 @@ def main() -> None:
             vcfs[m.group(1)] = (entity, files[name + ".tbi"])
     wanted = args.chromosomes.split(",") if args.chromosomes else [str(c) for c in range(1, 23)] + ["X"]
     missing = [c for c in wanted if c not in vcfs]
-    print(f"{args.folder}: indexed VCFs for {len(vcfs)} chromosomes; missing of those wanted: {missing or 'none'}")
+    log(f"{args.folder}: indexed VCFs for {len(vcfs)} chromosomes; missing of those wanted: {missing or 'none'}")
 
     eqtl = pd.read_csv(args.eqtls, sep="\t", dtype={"chrom": str})
     if args.build == 37:
@@ -118,9 +125,14 @@ def main() -> None:
         ranges, linear, seq = open_vcf(chrom)
         ranges = metered(ranges)
         samples = vcf_samples(ranges)
-        targets = sorted(p for c, p in alleles if c == chrom)
-        rows, n_filtered = [], 0
-        for p, fields in fetch_records(ranges, linear, seq, targets):
+        log(f"chr{chrom}: {len(samples)} samples; header read ({ranges.bytes_read / 1e6:.1f} MB)")
+        targets = sorted(p for c, p in alleles if c == chrom)[:args.max_sites]
+        rows, n_filtered, seen = [], 0, 0
+        for p, fields in fetch_records(ranges, linear, seq, targets, chunk=args.chunk_kb << 10):
+            seen += 1
+            if seen % 50 == 0:
+                log(f"chr{chrom}: {seen} records at {len(rows)} of {len(targets)} sites so far, "
+                    f"{ranges.bytes_read / 1e6:.0f} MB")
             if (chrom, p) in {(r[0], r[1]) for r in rows[-3:]}:
                 continue
             ref, alts = fields[3].decode(), fields[4].decode().split(",")
@@ -131,8 +143,8 @@ def main() -> None:
                     n_filtered += fields[6] not in (b"PASS", b".")
                     rows.append((chrom, p, alt, ref, allele_counts(fields, k)))
                     break
-        print(f"chr{chrom}: {len(rows)} of {len(targets)} eQTL sites found ({n_filtered} not PASS); "
-              f"{ranges.bytes_read / 1e6:.0f} MB read")
+        log(f"chr{chrom}: {len(rows)} of {len(targets)} eQTL sites found ({n_filtered} not PASS); "
+            f"{ranges.bytes_read / 1e6:.0f} MB read")
         return samples, rows
 
     def chrx_het():
@@ -143,7 +155,7 @@ def main() -> None:
         n_sites = np.zeros(len(samples))
         n_het = np.zeros(len(samples))
         used = 0
-        stream = BgzfLines(ranges)
+        stream = BgzfLines(ranges, chunk=args.chunk_kb << 10)
         for start in np.linspace(CHRX_FROM, CHRX_TO, args.chrx_windows).astype(int):
             window = (start - 1) >> 14
             if window >= len(index):
@@ -171,7 +183,7 @@ def main() -> None:
                 n_sites += ok
                 n_het += np.where(ok, het, 0)
                 used += 1
-        print(f"chrX: {used} common biallelic SNPs used for heterozygosity; {ranges.bytes_read / 1e6:.0f} MB read")
+        log(f"chrX: {used} common biallelic SNPs used for heterozygosity; {ranges.bytes_read / 1e6:.0f} MB read")
         return samples, n_sites, n_het
 
     autosomes = [c for c in wanted if c != "X" and c in vcfs]
