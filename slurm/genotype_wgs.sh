@@ -17,7 +17,7 @@
 #SBATCH --output=slurm/out/%j_genotype_wgs.out
 #SBATCH --error=slurm/out/%j_genotype_wgs.out
 
-EXTRA_BINDS="--bind scripts/:/opt/app/scripts/"
+EXTRA_BINDS="--bind scripts/:/opt/app/scripts/ --bind config/:/opt/app/config/"
 source slurm/common.sh
 
 G="$V2/genotypes/restricted"
