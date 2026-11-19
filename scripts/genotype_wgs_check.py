@@ -61,11 +61,11 @@ def wgs_individuals(samples, biospecimen_paths):
     return out
 
 
-def aligned(eqtl, array_variants, wgs_variants):
+def aligned(eqtl, array_variants, wgs_variants, wgs_build=37):
     """Rows of the shared, non-palindromic eQTL variants in both, and +1/-1 for
     the WGS row's counted allele being the array's a1 or a2."""
     a_rows = _match_eqtls(eqtl, array_variants, 37)
-    w_rows = _match_eqtls(eqtl, wgs_variants, 37)
+    w_rows = _match_eqtls(eqtl, wgs_variants, wgs_build)
     keep, sign = [], []
     seen = set()
     for a, w in zip(a_rows, w_rows):
@@ -98,6 +98,7 @@ def main() -> None:
     parser.add_argument("--array-chrx", type=Path)
     parser.add_argument("--wgs", type=Path, required=True)
     parser.add_argument("--wgs-chrx", type=Path)
+    parser.add_argument("--wgs-build", type=int, choices=(37, 38), default=37, help="of the WGS chrN:pos IDs")
     parser.add_argument("--eqtls", type=Path, required=True)
     parser.add_argument("--clinical", type=Path, required=True)
     parser.add_argument("--biospecimen", type=Path, nargs="+", required=True)
@@ -131,7 +132,7 @@ def main() -> None:
     av, as_, ad = read_genotypes(args.array)
     a_pid = _projid(as_)
     eqtl = pd.read_csv(args.eqtls, sep="\t", dtype={"chrom": str, "rsid": str})
-    rows, sign = aligned(eqtl, av, wv)
+    rows, sign = aligned(eqtl, av, wv, args.wgs_build)
     A = standardize(ad[rows[:, 0]])
     W = standardize(wd[rows[:, 1]]) * sign[:, None]
     ma, mw = np.isfinite(A), np.isfinite(W)
